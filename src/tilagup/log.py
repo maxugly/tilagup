@@ -1,4 +1,7 @@
-"""Loud by default. --quiet exists if you actually want silence."""
+"""Loud by default. --quiet exists if you actually want silence.
+
+Progress prints once (stderr) so terminals don't double every line.
+"""
 
 from __future__ import annotations
 
@@ -34,12 +37,8 @@ def _ts() -> str:
 def _emit(msg: str) -> None:
     if _quiet:
         return
-    line = f"[{_ts()}] {msg}"
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            print(line, file=stream, flush=True)
-        except Exception:
-            pass
+    # Once, to stderr — always visible in an interactive terminal, not doubled
+    print(f"[{_ts()}] {msg}", file=sys.stderr, flush=True)
 
 
 def say(msg: str = "", **_ignored: Any) -> None:
@@ -50,12 +49,7 @@ def banner(title: str) -> None:
     if _quiet:
         return
     line = "═" * max(12, min(72, len(title) + 8))
-    block = f"\n{line}\n  {title}\n{line}"
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            print(block, file=stream, flush=True)
-        except Exception:
-            pass
+    print(f"\n{line}\n  {title}\n{line}", file=sys.stderr, flush=True)
 
 
 def kv(key: str, value: Any) -> None:
@@ -75,24 +69,15 @@ def progress(current: int, total: int, label: str = "") -> None:
 
 
 def dump(title: str, text: str) -> None:
-    """Print a multi-line blob with a header (full prompts). Suppressed when quiet."""
     if _quiet:
         return
     _emit(f"──── {title} ────")
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            print(text if text.endswith("\n") else text + "\n", file=stream, flush=True)
-        except Exception:
-            pass
+    print(text if text.endswith("\n") else text + "\n", file=sys.stderr, flush=True)
     _emit(f"──── end {title} ({len(text)} chars) ────")
 
 
 def always(msg: str = "", **_ignored: Any) -> None:
     """Final summary / hard errors — still prints when --quiet."""
-    line = msg
-    # keep errors visible on stderr; summaries on both
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            print(line, file=stream, flush=True)
-        except Exception:
-            pass
+    print(msg, file=sys.stderr, flush=True)
+    # also stdout so capture tools see the summary
+    print(msg, file=sys.stdout, flush=True)

@@ -1,9 +1,13 @@
-"""FastSD CPU tiled upscale integration (optional dependency via FASTSDCPU_ROOT)."""
+"""FastSD CPU tiled upscale — runs in FastSD's own venv (torch/openvino live there)."""
 
 from __future__ import annotations
 
+import json
 import os
+import select
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,18 +23,35 @@ def fastsd_root() -> Path | None:
     return None
 
 
-def ensure_fastsd_on_path(root: Path | None = None) -> Path:
-    root = root or fastsd_root()
+def fastsd_python(root: Path) -> Path:
+    """Prefer FastSD's venv python; fall back to current interpreter."""
+    override = os.environ.get("FASTSDCPU_PYTHON") or os.environ.get("FASTSD_PYTHON")
+    candidates = []
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.extend(
+        [
+            root / "env" / "bin" / "python",
+            root / "env" / "bin" / "python3",
+            root / ".venv" / "bin" / "python",
+            root / ".venv" / "bin" / "python3",
+        ]
+    )
+    for c in candidates:
+        # Do NOT resolve() venv symlinks — that jumps to the base interpreter
+        # and drops site-packages (torch/openvino live in the venv).
+        if c.is_file() and os.access(c, os.X_OK):
+            return c
+    return Path(sys.executable)
+
+
+def ensure_fastsd_root() -> Path:
+    root = fastsd_root()
     if root is None:
         raise RuntimeError(
             "FastSD CPU not found. Set FASTSDCPU_ROOT to your fastsdcpu checkout "
             "(directory that contains src/)."
         )
-    src = str(root / "src")
-    if src not in sys.path:
-        sys.path.insert(0, src)
-    log.say(f"FastSD root: {root}")
-    log.say(f"FastSD src on path: {src}")
     return root
 
 
@@ -46,20 +67,10 @@ def run_tiled_upscale(
     tile_overlap: int = 32,
     tile_size: int = 256,
 ) -> Path:
-    """Call FastSD generate_upscaled_image with per-tile prompts. Loud the whole way."""
-    ensure_fastsd_on_path()
-
-    from state import get_context, get_settings  # type: ignore
-    from models.interface_types import InterfaceType  # type: ignore
-    from backend.upscale.tiled_upscale import generate_upscaled_image  # type: ignore
-
-    context = get_context(InterfaceType.CLI)
-    app_settings = get_settings()
-    config = app_settings.settings
-
-    config.lcm_diffusion_setting.strength = float(strength)
-    config.lcm_diffusion_setting.prompt = base_prompt
-    config.lcm_diffusion_setting.negative_prompt = negative_prompt
+    root = ensure_fastsd_root()
+    py = fastsd_python(root)
+    worker = Path(__file__).resolve().parent / "upscale_worker.py"
+    tilagup_src = Path(__file__).resolve().parent.parent  # …/src
 
     log.banner(f"FastSD upscale — {len(tiles)} tiles")
     log.kv("source", source_path)
@@ -68,50 +79,96 @@ def run_tiled_upscale(
     log.kv("scale", scale_factor)
     log.kv("tile_size", tile_size)
     log.kv("overlap", tile_overlap)
+    log.kv("fastsd_root", root)
+    log.kv("fastsd_python", py)
+    log.kv("worker", worker)
     log.dump("base prompt for upscale", base_prompt)
     log.dump("negative prompt", negative_prompt)
 
-    fs_tiles = []
     for i, t in enumerate(tiles):
         prompt = (t.get("prompt") or base_prompt or "").strip()
         log.progress(i, len(tiles), f"queue tile {t.get('id')} {t.get('w')}x{t.get('h')}")
         log.dump(f"upscale prompt tile {t.get('id')}", prompt)
-        fs_tiles.append(
-            {
-                "x": int(t["x"]),
-                "y": int(t["y"]),
-                "w": int(t["w"]),
-                "h": int(t["h"]),
-                "mask_box": None,
-                "prompt": prompt,
-                "scale_factor": float(scale_factor),
-            }
-        )
 
-    upscale_settings = {
-        "source_file": str(source_path),
-        "target_file": None,
+    job = {
+        "fastsd_src": str(root / "src"),
+        "source_path": str(source_path),
+        "output_path": str(output_path),
         "output_format": output_path.suffix.lstrip(".").upper() or "PNG",
         "strength": float(strength),
         "scale_factor": float(scale_factor),
-        "prompt": base_prompt,
-        "negative_prompt": negative_prompt,
         "tile_overlap": int(tile_overlap),
         "tile_size": int(tile_size),
-        "tiles": fs_tiles,
+        "base_prompt": base_prompt,
+        "negative_prompt": negative_prompt,
+        "tiles": tiles,
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    log.say("handing off to FastSD generate_upscaled_image — its prints should also appear here")
-    generate_upscaled_image(
-        config,
-        str(source_path),
-        float(strength),
-        upscale_settings=upscale_settings,
-        context=context,
-        tile_overlap=int(tile_overlap),
-        output_path=str(output_path),
-        image_format=upscale_settings["output_format"],
+    job_path = output_path.parent / "upscale_job.json"
+    job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
+    log.say(f"wrote job file: {job_path}")
+
+    env = os.environ.copy()
+    # so `import tilagup` is not required; worker is run as a script file
+    env["PYTHONUNBUFFERED"] = "1"
+    # Prefer FastSD packages; don't need tilagup on path for worker
+    env.pop("VIRTUAL_ENV", None)
+
+    cmd = [str(py), str(worker), str(job_path)]
+    log.say(f">>> SPAWN FastSD worker: {' '.join(cmd)}")
+    t0 = time.perf_counter()
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        env=env,
+        cwd=str(root),
     )
-    log.say(f"FastSD returned; output exists={output_path.is_file()} path={output_path}")
+    log.say(f"    worker pid={proc.pid}")
+
+    assert proc.stdout is not None and proc.stderr is not None
+    streams = [proc.stdout, proc.stderr]
+    last_beat = time.monotonic()
+    deadline = time.monotonic() + 3600 * 6  # 6h hard ceiling
+    try:
+        while True:
+            if proc.poll() is not None and not streams:
+                break
+            if time.monotonic() > deadline:
+                proc.kill()
+                raise TimeoutError("FastSD worker exceeded 6h")
+            now = time.monotonic()
+            if now - last_beat >= 15.0:
+                log.say(
+                    f"… ALIVE FastSD worker pid={proc.pid} "
+                    f"elapsed={int(now - t0)}s"
+                )
+                last_beat = now
+            if not streams:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.2)
+                continue
+            ready, _, _ = select.select(streams, [], [], 1.0)
+            for s in ready:
+                line = s.readline()
+                if line == "":
+                    streams = [x for x in streams if x is not s]
+                    continue
+                tag = "out" if s is proc.stdout else "err"
+                log.say(f"  [fastsd:{tag}] {line.rstrip()}")
+        rc = proc.wait()
+    except Exception:
+        proc.kill()
+        raise
+
+    log.say(f"<<< FastSD worker exit={rc} after {int(time.perf_counter() - t0)}s")
+    if rc != 0:
+        raise RuntimeError(f"FastSD worker failed with exit {rc} (see log above)")
+    if not output_path.is_file():
+        raise RuntimeError(f"worker exited 0 but missing output: {output_path}")
+    log.say(f"output ok: {output_path} ({output_path.stat().st_size} bytes)")
     return output_path
