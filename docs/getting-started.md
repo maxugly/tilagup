@@ -6,9 +6,10 @@ Prerequisites, dry-run, and first real upscale.
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
-- At least one vision CLI on `PATH`:
-  - **`agy`** — Antigravity headless (`agy -p "…"`)
-  - **`grok`** — Grok headless (`grok -p "…"`)
+- For real prompts: at least one vision CLI on `PATH`:
+  - **`agy`** — headless (`agy -p "…"`)
+  - **`grok`** — headless (`grok -p "…"`)
+- For offline CI / plumbing checks: `--agent stub` (no external CLI)
 - For actual SD upscale (not dry-run): a [FastSD CPU](https://github.com/rupeshs/fastsdcpu) checkout and `FASTSDCPU_ROOT` pointing at it
 
 ## Install
@@ -21,6 +22,14 @@ uv sync
 ## Dry-run (recommended first)
 
 Creates a full run archive: base prompt, tile crops, per-tile prompts, attribution JSON. **No** diffusion.
+
+Offline smoke (no `agy`/`grok` required):
+
+```bash
+uv run up.py /path/to/image.png --agent stub --dry-run
+```
+
+Live agents:
 
 ```bash
 uv run up.py /path/to/image.png \

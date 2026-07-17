@@ -36,9 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--agent",
-        choices=("agy", "grok", "both"),
+        choices=("agy", "grok", "both", "stub"),
         default="both",
-        help="Vision agent(s). 'both' alternates tiles. Default: both.",
+        help="Vision agent(s). 'both' alternates tiles; 'stub' is offline/CI. Default: both.",
     )
     p.add_argument(
         "--variation",

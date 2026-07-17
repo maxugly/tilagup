@@ -96,6 +96,7 @@ Allowed `agent` values: `agy`, `grok`, `human`, `unknown`.
 - Run archive (`run.json`, tiles, events.log)
 - Tile split with overlap
 - `agy` + `grok` headless adapters
+- `stub` offline agent for CI / full dry-run tests
 - Dry-run (prompts only)
 - FastSD CPU upscale hook (env `FASTSDCPU_ROOT`)
 - Resume + progress

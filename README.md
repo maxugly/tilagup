@@ -86,10 +86,11 @@ Skips stages already marked complete in `run.json` (base prompt, tile prompts, e
 
 | CLI | Binary | Role |
 |-----|--------|------|
-| Antigravity / Gemini stack | `agy` | Headless vision via `agy -p` |
+| Antigravity stack | `agy` | Headless vision via `agy -p` |
 | Grok | `grok` | Headless vision via `grok -p` |
+| Stub (offline) | *(in-process)* | CI / plumbing; `--agent stub` |
 
-`--agent agy|grok|both` — `both` alternates tiles (and is recorded per tile in JSON).
+`--agent agy|grok|both|stub` — `both` alternates live agents; `stub` never shells out.
 
 ## Variation vs strength
 

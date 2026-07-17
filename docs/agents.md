@@ -8,6 +8,7 @@ How tilagup talks to **`agy`** and **`grok`**, and how credit is stored.
 |----------|------------|----------------|
 | `agy` | `agy` | `agy -p "…" --dangerously-skip-permissions` |
 | `grok` | `grok` | `grok -p "…" --yolo` |
+| `stub` | *(in-process)* | No CLI; deterministic offline prompts for CI |
 
 There is no `antigravity` wrapper in this project. Use **`agy`**.
 
@@ -18,8 +19,17 @@ There is no `antigravity` wrapper in this project. Use **`agy`**.
 | `agy` | All prompts via `agy` |
 | `grok` | All prompts via `grok` |
 | `both` | Base prompt uses first available (agy preferred in list order); tiles **alternate** `agy`, `grok`, … |
+| `stub` | Offline stub agent — full pipeline dry-run without live vision CLIs |
 
 Assignment is recorded per tile so you can see who wrote each prompt in `run.json`.
+
+### Stub agent
+
+```bash
+uv run up.py sample.png --agent stub --dry-run
+```
+
+Writes real `run.json` / tile files with `attribution.agent = "stub"` and `model = "stub-v1"`. Used by automated tests; not for production upscales.
 
 ## What the agent receives
 
