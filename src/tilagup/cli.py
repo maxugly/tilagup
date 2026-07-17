@@ -113,7 +113,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    log.configure_stdio()
     log.set_quiet(args.quiet)
+    if not args.quiet:
+        log.say("tilagup CLI — loud mode (pass --quiet to mute)")
 
     if not args.resume and not args.image:
         build_parser().error("image path required unless --resume")

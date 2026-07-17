@@ -1,15 +1,18 @@
-"""Loud-by-default CLI logging. Quiet is opt-in, not the default lifestyle."""
+"""Loud-by-default CLI logging. Quiet is opt-in.
+
+Progress goes to **stderr** so it still shows when stdout is redirected/piped,
+and everything is flush=True. Dry-run is supposed to be watchable in the same
+terminal — if you can't see it, that's a bug.
+"""
 
 from __future__ import annotations
 
 import sys
 from datetime import datetime, timezone
-from typing import Any, TextIO
+from typing import Any
 
 
 _quiet = False
-_stream: TextIO = sys.stderr  # progress on stderr so stdout can stay clean for scripting if needed
-# Actually user wants to SEE things — use stdout for progress. Scripts can --quiet.
 
 
 def set_quiet(quiet: bool) -> None:
@@ -21,12 +24,21 @@ def is_quiet() -> bool:
     return _quiet
 
 
+def configure_stdio() -> None:
+    """Best-effort line buffering so progress isn't stuck in a pipe buffer."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 def _ts() -> str:
-    return datetime.now(timezone.utc).strftime("%H:%M:%S")
+    return datetime.now().strftime("%H:%M:%S")
 
 
-def say(msg: str = "", *, err: bool = False) -> None:
-    """Print a progress line unless --quiet."""
+def say(msg: str = "", *, err: bool = True) -> None:
+    """Progress line (stderr by default). Always flush. Suppressed only by --quiet."""
     if _quiet:
         return
     stream = sys.stderr if err else sys.stdout
@@ -36,15 +48,28 @@ def say(msg: str = "", *, err: bool = False) -> None:
 def banner(title: str) -> None:
     if _quiet:
         return
-    line = "─" * max(8, len(title) + 4)
-    print(f"\n{line}\n  {title}\n{line}", flush=True)
+    line = "═" * max(12, min(72, len(title) + 8))
+    print(f"\n{line}\n  {title}\n{line}", file=sys.stderr, flush=True)
 
 
 def kv(key: str, value: Any) -> None:
     say(f"  {key}: {value}")
 
 
-def always(msg: str, *, err: bool = False) -> None:
-    """Print even when quiet (errors / final path summary)."""
+def progress(current: int, total: int, label: str = "") -> None:
+    """One-line progress: [████░░░░] 3/10 label"""
+    if _quiet:
+        return
+    total = max(total, 1)
+    width = 20
+    filled = int(width * current / total)
+    bar = "█" * filled + "░" * (width - filled)
+    pct = 100.0 * current / total
+    extra = f"  {label}" if label else ""
+    say(f"[{bar}] {current}/{total} ({pct:.0f}%){extra}")
+
+
+def always(msg: str = "", *, err: bool = False) -> None:
+    """Print even when quiet (final summary / hard errors)."""
     stream = sys.stderr if err else sys.stdout
     print(msg, file=stream, flush=True)

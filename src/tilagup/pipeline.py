@@ -134,13 +134,18 @@ def stage_tile_prompts(
         raise RuntimeError("no tiles; run split first")
 
     total = len(tiles)
-    log.banner(f"tile prompts ({total} tiles, variation={variation})")
+    already = sum(1 for t in tiles if t.get("prompt"))
+    log.banner(f"tile prompts — {total} tiles, variation={variation}")
     log.kv("agents", ", ".join(a.name for a in agents))
+    log.kv("already_done", already)
+    log.kv("remaining", total - already)
+    log.say("you will see every tile start/finish in THIS terminal (no second pane needed)")
 
     for i, tile in enumerate(tiles):
         n = i + 1
+        done_so_far = sum(1 for t in tiles if t.get("prompt"))
         if tile.get("prompt") and not force:
-            log.say(f"[{n}/{total}] skip {tile['id']} (already prompted)")
+            log.progress(done_so_far, total, f"skip {tile['id']} (already prompted)")
             arch.event("skip_tile_prompt", tile_id=tile["id"])
             continue
         agent = pick_for_index(agents, i)
@@ -157,7 +162,8 @@ def stage_tile_prompts(
             "You write Stable Diffusion prompts. Reply with ONLY the prompt text.\n\n"
             + user
         )
-        log.say(f"[{n}/{total}] {tile['id']} via {agent.name} …")
+        log.progress(done_so_far, total, f"START {tile['id']} via {agent.name}")
+        log.say(f"    crop: {crop}")
         arch.event("tile_prompt_start", tile_id=tile["id"], agent=agent.name, index=n, total=total)
         try:
             result = agent.complete(full, timeout_s=timeout_s)
@@ -167,7 +173,7 @@ def stage_tile_prompts(
             data = arch.load()
             data["tiles"][i] = tile
             arch.save(data)
-            log.say(f"[{n}/{total}] FAILED {tile['id']}: {e}", err=True)
+            log.say(f"FAILED {tile['id']}: {e}")
             arch.event("tile_prompt_failed", tile_id=tile["id"], error=str(e))
             raise
 
@@ -208,12 +214,15 @@ def stage_tile_prompts(
         data["agents_used"] = sorted(used)
         data["stage"] = "tile_prompts"
         arch.save(data)
-        preview = result.text if len(result.text) <= 200 else result.text[:200] + "…"
-        log.say(
-            f"[{n}/{total}] ok {tile['id']} agent={result.agent} "
-            f"{result.duration_ms}ms {len(result.text)} chars"
+        done_now = sum(1 for t in data["tiles"] if t.get("prompt"))
+        preview = result.text if len(result.text) <= 220 else result.text[:220] + "…"
+        log.progress(
+            done_now,
+            total,
+            f"DONE {tile['id']} agent={result.agent} {result.duration_ms}ms",
         )
-        log.say(f"         {preview}")
+        log.say(f"    prompt preview: {preview}")
+        log.say(f"    wrote: {tile['prompt_path']}")
         arch.event(
             "tile_prompt_done",
             tile_id=tile["id"],
@@ -320,6 +329,9 @@ def run_pipeline(
         log.kv("agent", cfg.get("agent"))
         log.kv("variation", cfg.get("variation"))
         log.kv("dry_run", dry_run)
+        if dry_run:
+            log.say("MODE: dry-run — REAL prompts, NO upscale")
+            log.say("progress prints HERE (same terminal). if silent >15s you should see heartbeats.")
         arch = create_run(runs_dir, image, cfg)
 
     data = arch.load()

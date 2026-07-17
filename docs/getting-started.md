@@ -38,6 +38,10 @@ uv run up.py /path/to/image.png \
   --dry-run
 ```
 
+Dry-run is meant to be **watched in the same terminal**: tile N/M bars, agent start/finish,
+prompt previews, and a heartbeat every 10s while an agent is thinking. You should not need
+`tail -f` in another pane. (`--quiet` is the only mute switch.)
+
 Expected (also lots of live progress lines — loud by default):
 
 ```text
