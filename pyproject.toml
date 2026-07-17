@@ -1,0 +1,45 @@
+[project]
+name = "tilagup"
+version = "0.1.0"
+description = "Tiled agent upscale — base + per-tile vision prompts, FastSD CPU blend, full run archives"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "tilagup contributors" }]
+dependencies = [
+  "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+tilagup = "tilagup.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tilagup"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/up.py",
+  "/README.md",
+  "/LICENSE",
+  "/docs",
+  "/design",
+  "/tests",
+  "/AGENTS.md",
+]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
