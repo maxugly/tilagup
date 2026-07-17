@@ -80,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Re-run stages even if outputs exist.",
     )
     p.add_argument(
+        "--reprompt-tiles",
+        action="store_true",
+        help=(
+            "Wipe existing tile prompts and regenerate short unique-first ones "
+            "(keeps base + crops). Use after long CLIP-overflow dry-runs."
+        ),
+    )
+    p.add_argument(
         "--timeout",
         type=float,
         default=300.0,
@@ -143,6 +151,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.continue_upscale:
         dry = False
         config["dry_run"] = False
+    if args.reprompt_tiles and not args.continue_upscale:
+        # reprompt is a dry-run of tile prompts by default
+        dry = True
+        config["dry_run"] = True
 
     try:
         arch = run_pipeline(
@@ -152,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             dry_run=dry,
             force=args.force,
+            reprompt_tiles=args.reprompt_tiles,
             timeout_s=args.timeout,
         )
     except KeyboardInterrupt:

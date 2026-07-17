@@ -15,6 +15,7 @@ from tilagup.archive import (
     open_run,
     utc_now,
 )
+from tilagup.clip_fit import token_len
 from tilagup.prompts_lib import (
     BASE_SYSTEM,
     DEFAULT_NEGATIVE,
@@ -22,6 +23,10 @@ from tilagup.prompts_lib import (
     tile_user_message,
 )
 from tilagup.tiles import compute_tiles, export_crops, load_image_size
+
+# CLIP budget — agents must land under this; we retry once if not
+MAX_PROMPT_TOKENS = 75
+MAX_PROMPT_WORDS = 50
 
 
 def _source_path(arch: RunArchive, data: dict[str, Any]) -> Path:
@@ -54,6 +59,12 @@ def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float
     log.kv("timeout_s", timeout_s)
     arch.event("base_prompt_start", agent=agent.name)
     result = agent.complete(user, timeout_s=timeout_s)
+    result = _ensure_short_prompt(
+        agent,
+        result,
+        kind="base",
+        timeout_s=timeout_s,
+    )
     attribution = {
         "agent": result.agent,
         "cli": result.cli,
@@ -65,6 +76,7 @@ def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float
     data["base_prompt"] = {
         "text": result.text,
         "attribution": attribution,
+        "token_len": token_len(result.text),
     }
     used = set(data.get("agents_used") or [])
     used.add(result.agent)
@@ -72,9 +84,66 @@ def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float
     data["stage"] = "base_prompt"
     arch.save(data)
     atomic_write_text(arch.root / "base_prompt.txt", result.text)
-    log.say(f"base prompt written ({len(result.text)} chars, agent={result.agent})")
+    log.say(
+        f"base prompt written words={len(result.text.split())} "
+        f"clip_tokens≈{token_len(result.text)} agent={result.agent}"
+    )
     log.dump("BASE PROMPT (full)", result.text)
     arch.event("base_prompt_done", agent=result.agent, chars=len(result.text))
+
+
+def _ensure_short_prompt(agent, result, *, kind: str, timeout_s: float):
+    """If agent returned a CLIP-overflow essay, one hard rewrite pass."""
+    words = len(result.text.split())
+    toks = token_len(result.text)
+    if words <= MAX_PROMPT_WORDS and toks <= MAX_PROMPT_TOKENS:
+        return result
+    log.say(
+        f"{kind} prompt too long (words={words} clip_tokens≈{toks}) — "
+        f"asking {agent.name} to rewrite short, unique-first"
+    )
+    rewrite = (
+        f"Rewrite this Stable Diffusion prompt to ≤{MAX_PROMPT_WORDS} words "
+        f"and ≤{MAX_PROMPT_TOKENS} CLIP tokens. Keep the MOST SPECIFIC / UNIQUE "
+        f"details first; drop restated global fluff. Comma phrases ok. "
+        f"Return ONLY the new prompt.\n\nORIGINAL:\n{result.text}"
+    )
+    try:
+        result2 = agent.complete(rewrite, timeout_s=timeout_s)
+        log.say(
+            f"rewrite: words={len(result2.text.split())} "
+            f"clip_tokens≈{token_len(result2.text)}"
+        )
+        return result2
+    except Exception as e:
+        log.say(f"rewrite failed ({e}); keeping original (will CLIP-fit at upscale)")
+        return result
+
+
+def clear_tile_prompts(arch: RunArchive) -> int:
+    """Wipe tile prompts so they can be regenerated (keeps crops + base)."""
+    data = arch.load()
+    n = 0
+    for t in data.get("tiles") or []:
+        if t.get("prompt") or t.get("status") == "prompted":
+            n += 1
+        t["prompt"] = None
+        t["attribution"] = None
+        t["status"] = "pending"
+        t["error"] = None
+        # remove sidecar texts so nothing stale confuses inspection
+        for key in ("prompt_path", "meta_path"):
+            rel = t.get(key)
+            if rel:
+                p = arch.root / rel
+                if p.is_file():
+                    p.unlink()
+    data["stage"] = "split"
+    data["output"] = None
+    arch.save(data)
+    log.say(f"cleared {n} tile prompts (crops + base kept)")
+    arch.event("tile_prompts_cleared", count=n)
+    return n
 
 
 def stage_split(arch: RunArchive, *, force: bool = False) -> None:
@@ -157,16 +226,16 @@ def stage_tile_prompts(
             col=int(tile["col"]),
             variation=variation,
         )
-        full = (
-            "You write Stable Diffusion prompts. Reply with ONLY the prompt text.\n\n"
-            + user
-        )
+        full = BASE_SYSTEM + "\n\n" + user
         log.progress(done_so_far, total, f"START {tile['id']} via {agent.name}")
         log.say(f"    crop: {crop}")
         log.say(f"    geometry: x={tile['x']} y={tile['y']} w={tile['w']} h={tile['h']}")
         arch.event("tile_prompt_start", tile_id=tile["id"], agent=agent.name, index=n, total=total)
         try:
             result = agent.complete(full, timeout_s=timeout_s)
+            result = _ensure_short_prompt(
+                agent, result, kind=f"tile {tile['id']}", timeout_s=timeout_s
+            )
         except Exception as e:
             tile["status"] = "failed"
             tile["error"] = str(e)
@@ -188,6 +257,7 @@ def stage_tile_prompts(
         tile["attribution"] = attribution
         tile["status"] = "prompted"
         tile["error"] = None
+        tile["token_len"] = token_len(result.text)
 
         atomic_write_text(arch.root / tile["prompt_path"], result.text)
         atomic_write_json(
@@ -195,6 +265,7 @@ def stage_tile_prompts(
             {
                 "tile_id": tile["id"],
                 "prompt": result.text,
+                "token_len": tile["token_len"],
                 "attribution": attribution,
                 "geometry": {
                     "x": tile["x"],
@@ -218,7 +289,8 @@ def stage_tile_prompts(
         log.progress(
             done_now,
             total,
-            f"DONE {tile['id']} agent={result.agent} {result.duration_ms}ms",
+            f"DONE {tile['id']} agent={result.agent} "
+            f"words={len(result.text.split())} clip≈{tile['token_len']}",
         )
         log.dump(f"TILE PROMPT {tile['id']} (full)", result.text)
         log.say(f"    wrote: {arch.root / tile['prompt_path']}")
@@ -227,6 +299,7 @@ def stage_tile_prompts(
             tile_id=tile["id"],
             agent=result.agent,
             chars=len(result.text),
+            token_len=tile["token_len"],
             duration_ms=result.duration_ms,
         )
 
@@ -298,6 +371,7 @@ def run_pipeline(
     config: dict[str, Any],
     dry_run: bool,
     force: bool = False,
+    reprompt_tiles: bool = False,
     timeout_s: float = 300.0,
 ) -> RunArchive:
     if resume:
@@ -329,26 +403,42 @@ def run_pipeline(
         log.kv("variation", cfg.get("variation"))
         log.kv("dry_run", dry_run)
         if dry_run:
-            log.say("MODE: dry-run — REAL prompts, NO upscale")
+            log.say("MODE: dry-run — REAL short CLIP-safe prompts, NO upscale")
             log.say("progress prints HERE (same terminal). if silent >15s you should see heartbeats.")
         arch = create_run(runs_dir, image, cfg)
+
+    if reprompt_tiles:
+        log.banner("reprompt tiles — wipe long prompts, regenerate unique-first shorts")
+        clear_tile_prompts(arch)
+        force_tiles = True
+        # stay in dry-run unless user also asked for upscale
+        if not dry_run and not (config.get("dry_run") is False):
+            dry_run = True
+            data = arch.load()
+            data["config"]["dry_run"] = True
+            arch.save(data)
+    else:
+        force_tiles = force
 
     data = arch.load()
     stage = data.get("stage") or "init"
     want_dry = bool(dry_run or data["config"].get("dry_run"))
 
-    if stage == "dry_run_complete" and want_dry and not force:
-        log.say("already dry_run_complete — nothing to do (pass --continue-upscale for SD)")
+    if stage == "dry_run_complete" and want_dry and not force and not reprompt_tiles:
+        log.say(
+            "already dry_run_complete — nothing to do "
+            "(--reprompt-tiles to rewrite prompts, --continue-upscale for SD)"
+        )
         arch.event("already_complete", stage=stage)
         return arch
-    if stage == "done" and not force:
+    if stage == "done" and not force and not reprompt_tiles:
         log.say("already done — nothing to do (pass --force to redo)")
         arch.event("already_complete", stage=stage)
         return arch
 
-    stage_base_prompt(arch, force=force, timeout_s=timeout_s)
-    stage_split(arch, force=force)
-    stage_tile_prompts(arch, force=force, timeout_s=timeout_s)
+    stage_base_prompt(arch, force=force and not reprompt_tiles, timeout_s=timeout_s)
+    stage_split(arch, force=False)  # never re-split on reprompt; crops stay
+    stage_tile_prompts(arch, force=force_tiles, timeout_s=timeout_s)
 
     data = arch.load()
     want_dry = bool(dry_run or data["config"].get("dry_run"))
