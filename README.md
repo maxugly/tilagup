@@ -55,7 +55,7 @@ uv run up.py /path/to/weird.png \
   --dry-run
 ```
 
-Creates `runs/<run_id>/` with:
+Creates `runs/<image_key>/<run_id>/` with:
 
 | Path | Purpose |
 |------|---------|
@@ -67,6 +67,8 @@ Creates `runs/<run_id>/` with:
 | `tiles/r00_c00.prompt.txt` | Tile prompt text |
 | `tiles/r00_c00.meta.json` | Per-tile agent attribution |
 
+CLI is **loud by default** (stage banners, tile progress, agent output). Pass `--quiet` only if you want it muted.
+
 ### Real upscale
 
 ```bash
@@ -77,7 +79,7 @@ uv run up.py /path/to/weird.png --strength 0.28 --scale 2
 ### Resume
 
 ```bash
-uv run up.py --resume runs/20260717_045012_ab12
+uv run up.py --resume runs/<image_key>/20260717_045012_ab12
 ```
 
 Skips stages already marked complete in `run.json` (base prompt, tile prompts, etc.).

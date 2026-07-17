@@ -44,7 +44,7 @@ tilagup/
 ### For all agents working here
 
 1. **AGENTS.md in every directory.** Read it before editing files there.
-2. **Run archives are sacred.** Never delete a `runs/<id>/` without explicit human OK. Prefer append-only `events.log` + update `run.json`.
+2. **Run archives are sacred.** Layout is `runs/<image_key>/<run_id>/`. Never delete without explicit human OK. Prefer append-only `events.log` + update `run.json`. Progress is **loud by default** (`log.say`); quiet is opt-in via `--quiet`.
 3. **Base-locked tile prompts.** Every tile prompt must stay inside the base style/subject. Variation is local detail, not new global subjects.
 4. **Reuse FastSD blend.** Do not invent a new paste path. Feed `tiles[]` into FastSD’s tiled upscaler (overlap + soft mask).
 5. **Agent output is boring.** Vision agents must return prompt text only (or write a file). Parse failures → one retry → log + fail tile.

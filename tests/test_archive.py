@@ -17,7 +17,11 @@ def test_create_run_copies_source(tmp_path: Path):
     )
     data = arch.load()
     assert data["run_id"]
+    assert data["image_key"]
     assert data["stage"] == "init"
+    # runs/<image_key>/<run_id>/
+    assert arch.root.parent.name == data["image_key"]
+    assert arch.root.name == data["run_id"]
     assert (arch.root / data["source"]["path"]).is_file()
     assert data["source"]["width"] == 64
     assert data["source"]["height"] == 48

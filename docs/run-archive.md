@@ -4,27 +4,35 @@ Every invocation creates (or resumes) a directory under `runs/`. This is the sou
 
 ## Directory layout
 
+Each **image** gets its own folder; each **attempt** is a timestamped run under that:
+
 ```text
-runs/<run_id>/
-  run.json              # authoritative machine state
-  events.log            # append-only NDJSON trail
-  source.<ext>          # copy of input
-  base_prompt.txt       # convenience copy of base prompt text
-  tiles/
-    r00_c00.png         # crop for vision
-    r00_c00.prompt.txt  # tile prompt text
-    r00_c00.meta.json   # tile prompt + attribution + geometry
-    …
-  output.png            # final upscale (after SD stage)
+runs/
+  <image_key>/                    # e.g. HIsharp__a1b2c3
+    <run_id>/                     # e.g. 20260717_045012_ab12
+      run.json                    # authoritative machine state
+      events.log                  # append-only NDJSON trail
+      source.<ext>                # copy of input
+      base_prompt.txt
+      tiles/
+        r00_c00.png
+        r00_c00.prompt.txt
+        r00_c00.meta.json
+        …
+      output.png                  # after SD stage
 ```
 
+`image_key` = sanitized stem + short hash of the absolute path (same filename from different places won’t collide).  
 `run_id` looks like `20260717_045012_ab12`.
+
+Progress is **loud by default** (stage banners, tile N/M, agent stdout). Use `--quiet` only if you really want silence.
 
 ## `run.json` (core fields)
 
 ```json
 {
   "run_id": "20260717_045012_ab12",
+  "image_key": "HIsharp__a1b2c3",
   "created_at": "2026-07-17T04:50:12+00:00",
   "updated_at": "…",
   "stage": "dry_run_complete",

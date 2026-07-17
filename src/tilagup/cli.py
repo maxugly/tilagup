@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from tilagup import __version__
+from tilagup import __version__, log
 from tilagup.pipeline import run_pipeline
 from tilagup.prompts_lib import DEFAULT_NEGATIVE
 
@@ -14,7 +14,10 @@ from tilagup.prompts_lib import DEFAULT_NEGATIVE
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="tilagup",
-        description="Tiled agent upscale — base + per-tile vision prompts, FastSD blend, full archives.",
+        description=(
+            "Tiled agent upscale — base + per-tile vision prompts, FastSD blend, "
+            "full archives. Loud by default; use --quiet if you hate joy."
+        ),
     )
     p.add_argument(
         "image",
@@ -26,13 +29,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume",
         type=Path,
         default=None,
-        help="Resume an existing runs/<id> directory (or path to run.json).",
+        help="Resume an existing run dir (runs/<image_key>/<run_id>/ or path to run.json).",
     )
     p.add_argument(
         "--runs-dir",
         type=Path,
         default=Path("runs"),
-        help="Directory for run archives (default: ./runs).",
+        help="Root for archives: runs/<image_key>/<run_id>/ (default: ./runs).",
     )
     p.add_argument(
         "--agent",
@@ -99,20 +102,26 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="On --resume after dry-run, clear dry_run and run FastSD upscale.",
     )
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Silence progress spam (default is loud — you asked for this).",
+    )
     p.add_argument("--version", action="version", version=f"tilagup {__version__}")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    log.set_quiet(args.quiet)
 
     if not args.resume and not args.image:
         build_parser().error("image path required unless --resume")
     if args.image and not args.image.is_file():
-        print(f"error: image not found: {args.image}", file=sys.stderr)
+        log.always(f"error: image not found: {args.image}", err=True)
         return 2
     if not (0.0 <= args.variation <= 1.0):
-        print("error: --variation must be in [0, 1]", file=sys.stderr)
+        log.always("error: --variation must be in [0, 1]", err=True)
         return 2
 
     config = {
@@ -128,7 +137,6 @@ def main(argv: list[str] | None = None) -> int:
         "grok_model": args.grok_model,
     }
 
-    # Resume after dry-run → real upscale
     dry = args.dry_run
     if args.continue_upscale:
         dry = False
@@ -145,25 +153,28 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=args.timeout,
         )
     except KeyboardInterrupt:
-        print("\ninterrupted — run dir preserved for --resume", file=sys.stderr)
+        log.always("\ninterrupted — run dir preserved for --resume", err=True)
         return 130
     except Exception as e:
-        print(f"error: {e}", file=sys.stderr)
+        log.always(f"error: {e}", err=True)
         return 1
 
     data = arch.load()
-    print(f"run_id:  {data['run_id']}")
-    print(f"path:    {arch.root}")
-    print(f"stage:   {data.get('stage')}")
+    log.always("")
+    log.always(f"run_id:     {data['run_id']}")
+    if data.get("image_key"):
+        log.always(f"image_key:  {data['image_key']}")
+    log.always(f"path:       {arch.root}")
+    log.always(f"stage:      {data.get('stage')}")
     bp = (data.get("base_prompt") or {}).get("text")
     if bp:
         who = ((data.get("base_prompt") or {}).get("attribution") or {}).get("agent")
-        print(f"base:    {len(bp)} chars (agent={who})")
-    print(f"tiles:   {len(data.get('tiles') or [])}")
-    print(f"agents:  {', '.join(data.get('agents_used') or [])}")
+        log.always(f"base:       {len(bp)} chars (agent={who})")
+    log.always(f"tiles:      {len(data.get('tiles') or [])}")
+    log.always(f"agents:     {', '.join(data.get('agents_used') or [])}")
     if data.get("output"):
-        print(f"output:  {arch.root / data['output']}")
-    print(f"json:    {arch.run_json}")
+        log.always(f"output:     {arch.root / data['output']}")
+    log.always(f"json:       {arch.run_json}")
     return 0
 
 

@@ -75,28 +75,78 @@ def run_argv(
     model: str | None = None,
     timeout_s: float = 300.0,
 ) -> AgentResult:
+    """Run an agent CLI. Streams output live (unless quiet); still captures for parsing."""
+    from tilagup import log
+
     t0 = time.perf_counter()
+    log.say(f"spawn  {' '.join(argv[:4])}{' …' if len(argv) > 4 else ''}")
+    # Don't dump the entire multi-kb prompt into the shell line — already logged elsewhere
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             argv,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_s,
-            check=False,
+            bufsize=1,
         )
-    except subprocess.TimeoutExpired as e:
-        raise TimeoutError(f"{cli} timed out after {timeout_s}s: {argv[:3]}…") from e
+    except FileNotFoundError as e:
+        raise RuntimeError(f"{cli} not found on PATH") from e
+
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    assert proc.stdout is not None and proc.stderr is not None
+    # Read both streams without deadlocking: poll until process exits
+    import select
+
+    streams = [proc.stdout, proc.stderr]
+    deadline = time.monotonic() + timeout_s
+    try:
+        while streams and proc.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                raise TimeoutError(f"{cli} timed out after {timeout_s}s")
+            ready, _, _ = select.select(streams, [], [], min(1.0, remaining))
+            for s in ready:
+                line = s.readline()
+                if line == "":
+                    streams = [x for x in streams if x is not s]
+                    continue
+                if s is proc.stdout:
+                    stdout_chunks.append(line)
+                    log.say(f"  [{cli}:out] {line.rstrip()}")
+                else:
+                    stderr_chunks.append(line)
+                    log.say(f"  [{cli}:err] {line.rstrip()}")
+        # drain leftovers
+        for s, bucket, tag in (
+            (proc.stdout, stdout_chunks, "out"),
+            (proc.stderr, stderr_chunks, "err"),
+        ):
+            rest = s.read()
+            if rest:
+                bucket.append(rest)
+                for line in rest.splitlines():
+                    log.say(f"  [{cli}:{tag}] {line}")
+        rc = proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+    except TimeoutError:
+        proc.kill()
+        raise
+
     duration_ms = int((time.perf_counter() - t0) * 1000)
-    stdout = proc.stdout or ""
-    stderr = proc.stderr or ""
-    if proc.returncode != 0:
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
+    log.say(f"done   {cli} exit={rc} in {duration_ms}ms")
+    if rc != 0:
         raise RuntimeError(
-            f"{cli} exit {proc.returncode}: {stderr[-2000:] or stdout[-2000:]}"
+            f"{cli} exit {rc}: {stderr[-2000:] or stdout[-2000:]}"
         )
     raw = stdout.strip() or stderr.strip()
     text = clean_prompt_text(raw)
     if not text:
         raise RuntimeError(f"{cli} returned empty prompt text")
+    log.say(f"prompt {len(text)} chars from {agent}")
     return AgentResult(
         text=text,
         agent=agent,
@@ -106,6 +156,7 @@ def run_argv(
         raw=raw,
         command=argv,
     )
+
 
 
 def which(binary: str) -> str | None:

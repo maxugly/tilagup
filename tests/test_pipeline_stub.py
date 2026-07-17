@@ -123,7 +123,10 @@ def test_cli_stub_dry_run(tmp_path: Path):
         ]
     )
     assert code == 0
-    run_dirs = list(runs.iterdir())
+    # layout: runs/<image_key>/<run_id>/run.json
+    image_dirs = [p for p in runs.iterdir() if p.is_dir()]
+    assert len(image_dirs) == 1
+    run_dirs = [p for p in image_dirs[0].iterdir() if p.is_dir()]
     assert len(run_dirs) == 1
     run_json = run_dirs[0] / "run.json"
     assert run_json.is_file()
@@ -132,3 +135,6 @@ def test_cli_stub_dry_run(tmp_path: Path):
     data = json.loads(run_json.read_text(encoding="utf-8"))
     assert data["stage"] == "dry_run_complete"
     assert data["config"]["agent"] == "stub"
+    assert data.get("image_key")
+    assert image_dirs[0].name == data["image_key"]
+    assert run_dirs[0].name == data["run_id"]

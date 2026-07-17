@@ -69,7 +69,10 @@ class StubAgent:
         return True
 
     def complete(self, user_prompt: str, *, timeout_s: float = 300.0) -> AgentResult:
+        from tilagup import log
+
         t0 = time.perf_counter()
+        log.say("stub agent thinking (offline, no network)…")
         path_m = _PATH_RE.search(user_prompt)
         image_path = Path(path_m.group(1)) if path_m else None
         hint = _image_hint(image_path)

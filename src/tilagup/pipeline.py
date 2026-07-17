@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from tilagup import log
 from tilagup.agents import build_agents, pick_for_index
 from tilagup.archive import (
     RunArchive,
@@ -31,6 +32,7 @@ def _source_path(arch: RunArchive, data: dict[str, Any]) -> Path:
 def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float = 300.0) -> None:
     data = arch.load()
     if data.get("base_prompt") and data["base_prompt"].get("text") and not force:
+        log.say("skip base prompt (already present)")
         arch.event("skip_base_prompt", reason="already_present")
         return
 
@@ -42,12 +44,14 @@ def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float
     )
     agent = pick_for_index(agents, 0)
     src = _source_path(arch, data)
-    # Embed system guidance in the user prompt (CLIs take a single -p string)
     user = (
         BASE_SYSTEM
         + "\n\n"
         + base_user_message(str(src.resolve()))
     )
+    log.banner(f"base prompt via {agent.name}")
+    log.kv("image", src)
+    log.kv("timeout_s", timeout_s)
     arch.event("base_prompt_start", agent=agent.name)
     result = agent.complete(user, timeout_s=timeout_s)
     attribution = {
@@ -68,24 +72,30 @@ def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float
     data["stage"] = "base_prompt"
     arch.save(data)
     atomic_write_text(arch.root / "base_prompt.txt", result.text)
+    log.say(f"base prompt written ({len(result.text)} chars, agent={result.agent})")
+    preview = result.text if len(result.text) <= 400 else result.text[:400] + "…"
+    log.say(f"base preview:\n{preview}")
     arch.event("base_prompt_done", agent=result.agent, chars=len(result.text))
 
 
 def stage_split(arch: RunArchive, *, force: bool = False) -> None:
     data = arch.load()
     if data.get("tiles") and not force:
+        log.say(f"skip split ({len(data['tiles'])} tiles already present)")
         arch.event("skip_split", reason="tiles_already_present", count=len(data["tiles"]))
         return
 
     cfg = data["config"]
     src = _source_path(arch, data)
     w, h = load_image_size(src)
-    specs = compute_tiles(
-        w,
-        h,
-        tile_size=int(cfg.get("tile_size", 256)),
-        overlap=int(cfg.get("overlap", 32)),
-    )
+    tile_size = int(cfg.get("tile_size", 256))
+    overlap = int(cfg.get("overlap", 32))
+    log.banner("split tiles")
+    log.kv("image_size", f"{w}x{h}")
+    log.kv("tile_size", tile_size)
+    log.kv("overlap", overlap)
+    specs = compute_tiles(w, h, tile_size=tile_size, overlap=overlap)
+    log.say(f"grid → {len(specs)} tiles; exporting crops…")
     tiles = export_crops(src, arch.tiles_dir, specs)
     data = arch.load()
     data["tiles"] = tiles
@@ -93,6 +103,11 @@ def stage_split(arch: RunArchive, *, force: bool = False) -> None:
     data["source"]["height"] = h
     data["stage"] = "split"
     arch.save(data)
+    for t in tiles:
+        log.say(
+            f"  tile {t['id']}: x={t['x']} y={t['y']} w={t['w']} h={t['h']} → {t['crop_path']}"
+        )
+    log.say(f"split done: {len(tiles)} crops in {arch.tiles_dir}")
     arch.event("split_done", tiles=len(tiles), width=w, height=h)
 
 
@@ -118,8 +133,14 @@ def stage_tile_prompts(
     if not tiles:
         raise RuntimeError("no tiles; run split first")
 
+    total = len(tiles)
+    log.banner(f"tile prompts ({total} tiles, variation={variation})")
+    log.kv("agents", ", ".join(a.name for a in agents))
+
     for i, tile in enumerate(tiles):
+        n = i + 1
         if tile.get("prompt") and not force:
+            log.say(f"[{n}/{total}] skip {tile['id']} (already prompted)")
             arch.event("skip_tile_prompt", tile_id=tile["id"])
             continue
         agent = pick_for_index(agents, i)
@@ -132,12 +153,12 @@ def stage_tile_prompts(
             col=int(tile["col"]),
             variation=variation,
         )
-        # include system-ish preamble
         full = (
             "You write Stable Diffusion prompts. Reply with ONLY the prompt text.\n\n"
             + user
         )
-        arch.event("tile_prompt_start", tile_id=tile["id"], agent=agent.name)
+        log.say(f"[{n}/{total}] {tile['id']} via {agent.name} …")
+        arch.event("tile_prompt_start", tile_id=tile["id"], agent=agent.name, index=n, total=total)
         try:
             result = agent.complete(full, timeout_s=timeout_s)
         except Exception as e:
@@ -146,6 +167,7 @@ def stage_tile_prompts(
             data = arch.load()
             data["tiles"][i] = tile
             arch.save(data)
+            log.say(f"[{n}/{total}] FAILED {tile['id']}: {e}", err=True)
             arch.event("tile_prompt_failed", tile_id=tile["id"], error=str(e))
             raise
 
@@ -186,17 +208,25 @@ def stage_tile_prompts(
         data["agents_used"] = sorted(used)
         data["stage"] = "tile_prompts"
         arch.save(data)
+        preview = result.text if len(result.text) <= 200 else result.text[:200] + "…"
+        log.say(
+            f"[{n}/{total}] ok {tile['id']} agent={result.agent} "
+            f"{result.duration_ms}ms {len(result.text)} chars"
+        )
+        log.say(f"         {preview}")
         arch.event(
             "tile_prompt_done",
             tile_id=tile["id"],
             agent=result.agent,
             chars=len(result.text),
+            duration_ms=result.duration_ms,
         )
 
 
 def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
     data = arch.load()
     if data.get("output") and Path(arch.root / data["output"]).is_file() and not force:
+        log.say("skip upscale (output already exists)")
         arch.event("skip_upscale", reason="output_exists")
         return
 
@@ -213,6 +243,11 @@ def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
     base = data["base_prompt"]["text"]
     neg = data.get("negative_prompt") or cfg.get("negative_prompt") or DEFAULT_NEGATIVE
 
+    log.banner("FastSD tiled upscale")
+    log.kv("strength", cfg.get("strength"))
+    log.kv("scale", cfg.get("scale"))
+    log.kv("tiles", len(data["tiles"]))
+    log.kv("output", out_path)
     arch.event("upscale_start", strength=cfg.get("strength"), scale=cfg.get("scale"))
     try:
         run_tiled_upscale(
@@ -231,6 +266,7 @@ def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
         data["error"] = str(e)
         data["stage"] = "upscale_failed"
         arch.save(data)
+        log.say(f"upscale FAILED: {e}", err=True)
         arch.event("upscale_failed", error=str(e))
         raise
 
@@ -242,6 +278,7 @@ def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
         if t.get("status") == "prompted":
             t["status"] = "upscaled"
     arch.save(data)
+    log.say(f"upscale done → {out_path}")
     arch.event("upscale_done", output=out_name)
 
 
@@ -258,7 +295,6 @@ def run_pipeline(
     if resume:
         arch = open_run(resume)
         arch.event("resume", path=str(arch.root))
-        # Merge CLI overrides into stored config (resume can bump strength, etc.)
         data = arch.load()
         merged = dict(data.get("config") or {})
         for k, v in config.items():
@@ -270,6 +306,7 @@ def run_pipeline(
             merged["dry_run"] = False
         data["config"] = merged
         arch.save(data)
+        log.say(f"resumed stage={data.get('stage')} dry_run={merged.get('dry_run')}")
     else:
         if image is None:
             raise ValueError("image path required unless --resume")
@@ -277,17 +314,24 @@ def run_pipeline(
         cfg.setdefault("negative_prompt", DEFAULT_NEGATIVE)
         cfg.setdefault("agent", "both")
         cfg["dry_run"] = dry_run
+        log.banner("tilagup start")
+        log.kv("image", image)
+        log.kv("runs_dir", runs_dir)
+        log.kv("agent", cfg.get("agent"))
+        log.kv("variation", cfg.get("variation"))
+        log.kv("dry_run", dry_run)
         arch = create_run(runs_dir, image, cfg)
 
     data = arch.load()
     stage = data.get("stage") or "init"
     want_dry = bool(dry_run or data["config"].get("dry_run"))
 
-    # Finished dry-run: either stop, or continue to upscale if caller cleared dry_run
     if stage == "dry_run_complete" and want_dry and not force:
+        log.say("already dry_run_complete — nothing to do (pass --continue-upscale for SD)")
         arch.event("already_complete", stage=stage)
         return arch
     if stage == "done" and not force:
+        log.say("already done — nothing to do (pass --force to redo)")
         arch.event("already_complete", stage=stage)
         return arch
 
@@ -300,13 +344,18 @@ def run_pipeline(
     if want_dry:
         data["stage"] = "dry_run_complete"
         arch.save(data)
+        log.banner("dry-run complete")
+        log.kv("run_dir", arch.root)
+        log.kv("tiles", len(data.get("tiles") or []))
+        log.kv("next", f"uv run up.py --resume {arch.root} --continue-upscale")
         arch.event("dry_run_complete")
         return arch
 
-    # Continuing from a prior dry-run into SD: clear flag
     if data["config"].get("dry_run"):
         data["config"]["dry_run"] = False
         arch.save(data)
 
     stage_upscale(arch, force=force)
+    log.banner("all done")
+    log.kv("run_dir", arch.root)
     return arch

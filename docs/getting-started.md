@@ -38,23 +38,25 @@ uv run up.py /path/to/image.png \
   --dry-run
 ```
 
-Expected:
+Expected (also lots of live progress lines — loud by default):
 
 ```text
-run_id:  20260717_…
-path:    runs/20260717_…
-stage:   dry_run_complete
-tiles:   N
-agents:  agy, grok
-json:    runs/…/run.json
+run_id:     20260717_…
+image_key:  yourname__a1b2c3
+path:       runs/yourname__a1b2c3/20260717_…
+stage:      dry_run_complete
+tiles:      N
+agents:     agy, grok
+json:       runs/…/run.json
 ```
 
 Inspect:
 
 ```bash
-less runs/<id>/base_prompt.txt
-ls runs/<id>/tiles/
-jq '.tiles[] | {id, agent: .attribution.agent, status}' runs/<id>/run.json
+set run runs/<image_key>/<run_id>
+less $run/base_prompt.txt
+ls $run/tiles/
+jq '.tiles[] | {id, agent: .attribution.agent, status}' $run/run.json
 ```
 
 ## Real upscale
@@ -75,7 +77,7 @@ Output lands at `runs/<id>/output.png`. Progress is appended to `events.log` and
 If a run dies mid-prompting or mid-upscale:
 
 ```bash
-uv run up.py --resume runs/<id>
+uv run up.py --resume runs/<image_key>/<run_id>
 ```
 
 Completed base/tile prompts are skipped unless you pass `--force`.
