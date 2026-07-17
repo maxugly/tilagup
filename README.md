@@ -67,7 +67,7 @@ Creates `runs/<image_key>/<run_id>/` with:
 | `tiles/r00_c00.prompt.txt` | Tile prompt text |
 | `tiles/r00_c00.meta.json` | Per-tile agent attribution |
 
-CLI is **loud by default** (stage banners, tile progress, agent output). Pass `--quiet` only if you want it muted.
+CLI is **always loud** — same terminal, full prompts, agent output, 5s heartbeats while waiting, upscale tile queue. No quiet mode. No second-terminal log tailing.
 
 ### Real upscale
 

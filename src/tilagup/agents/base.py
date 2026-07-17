@@ -79,8 +79,14 @@ def run_argv(
     from tilagup import log
 
     t0 = time.perf_counter()
-    log.say(f">>> calling {cli} (agent={agent}) — live output below, heartbeat every 10s")
-    log.say(f"    argv head: {' '.join(argv[:3])} …")
+    log.say(f">>> SPAWN {cli}  agent={agent}  timeout={timeout_s}s")
+    log.say(f"    full argv ({len(argv)} parts):")
+    for i, part in enumerate(argv):
+        # show each arg; huge -p bodies get dumped fully so you see the ask
+        if len(part) > 200:
+            log.dump(f"argv[{i}]", part)
+        else:
+            log.say(f"      [{i}] {part!r}")
     try:
         proc = subprocess.Popen(
             argv,
@@ -92,6 +98,7 @@ def run_argv(
     except FileNotFoundError as e:
         raise RuntimeError(f"{cli} not found on PATH") from e
 
+    log.say(f"    pid={proc.pid}")
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
 
@@ -112,25 +119,23 @@ def run_argv(
                 raise TimeoutError(f"{cli} timed out after {timeout_s}s")
 
             now = time.monotonic()
-            # Heartbeat: prove we are alive even when the agent is silent
-            if now - last_beat >= 10.0:
+            if now - last_beat >= 5.0:
                 waited = int(now - t0)
                 silent = int(now - last_activity)
                 log.say(
-                    f"… still waiting on {cli}  "
+                    f"… ALIVE waiting on {cli} pid={proc.pid}  "
                     f"elapsed={waited}s  silent={silent}s  "
                     f"timeout_in={int(remaining)}s"
                 )
                 last_beat = now
 
             if not streams:
-                # process may still be finishing
                 if proc.poll() is not None:
                     break
                 time.sleep(0.2)
                 continue
 
-            ready, _, _ = select.select(streams, [], [], min(1.0, remaining))
+            ready, _, _ = select.select(streams, [], [], min(0.5, remaining))
             if not ready:
                 continue
             for s in ready:
@@ -146,7 +151,6 @@ def run_argv(
                     stderr_chunks.append(line)
                     log.say(f"  [{cli}:err] {line.rstrip()}")
 
-        # drain leftovers
         for s, bucket, tag in (
             (proc.stdout, stdout_chunks, "out"),
             (proc.stderr, stderr_chunks, "err"),
@@ -164,16 +168,19 @@ def run_argv(
     duration_ms = int((time.perf_counter() - t0) * 1000)
     stdout = "".join(stdout_chunks)
     stderr = "".join(stderr_chunks)
-    log.say(f"<<< {cli} finished exit={rc} in {duration_ms}ms")
+    log.say(f"<<< {cli} EXIT {rc} after {duration_ms}ms")
     if rc != 0:
+        log.dump(f"{cli} stderr (fail)", stderr[-8000:] or "(empty)")
+        log.dump(f"{cli} stdout (fail)", stdout[-8000:] or "(empty)")
         raise RuntimeError(
             f"{cli} exit {rc}: {stderr[-2000:] or stdout[-2000:]}"
         )
     raw = stdout.strip() or stderr.strip()
     text = clean_prompt_text(raw)
     if not text:
+        log.dump(f"{cli} raw empty after clean", raw or "(empty)")
         raise RuntimeError(f"{cli} returned empty prompt text")
-    log.say(f"got prompt: {len(text)} chars from {agent}")
+    log.dump(f"PROMPT from {agent}/{cli}", text)
     return AgentResult(
         text=text,
         agent=agent,
@@ -183,6 +190,7 @@ def run_argv(
         raw=raw,
         command=argv,
     )
+
 
 
 

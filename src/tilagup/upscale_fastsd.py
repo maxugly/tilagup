@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from tilagup import log
+
 
 def fastsd_root() -> Path | None:
     env = os.environ.get("FASTSDCPU_ROOT") or os.environ.get("FASTSD_ROOT")
@@ -27,6 +29,8 @@ def ensure_fastsd_on_path(root: Path | None = None) -> Path:
     src = str(root / "src")
     if src not in sys.path:
         sys.path.insert(0, src)
+    log.say(f"FastSD root: {root}")
+    log.say(f"FastSD src on path: {src}")
     return root
 
 
@@ -42,7 +46,7 @@ def run_tiled_upscale(
     tile_overlap: int = 32,
     tile_size: int = 256,
 ) -> Path:
-    """Call FastSD generate_upscaled_image with per-tile prompts."""
+    """Call FastSD generate_upscaled_image with per-tile prompts. Loud the whole way."""
     ensure_fastsd_on_path()
 
     from state import get_context, get_settings  # type: ignore
@@ -53,14 +57,25 @@ def run_tiled_upscale(
     app_settings = get_settings()
     config = app_settings.settings
 
-    # Prefer OpenVINO path if already configured in settings.yaml
     config.lcm_diffusion_setting.strength = float(strength)
     config.lcm_diffusion_setting.prompt = base_prompt
     config.lcm_diffusion_setting.negative_prompt = negative_prompt
 
+    log.banner(f"FastSD upscale — {len(tiles)} tiles")
+    log.kv("source", source_path)
+    log.kv("output", output_path)
+    log.kv("strength", strength)
+    log.kv("scale", scale_factor)
+    log.kv("tile_size", tile_size)
+    log.kv("overlap", tile_overlap)
+    log.dump("base prompt for upscale", base_prompt)
+    log.dump("negative prompt", negative_prompt)
+
     fs_tiles = []
-    for t in tiles:
+    for i, t in enumerate(tiles):
         prompt = (t.get("prompt") or base_prompt or "").strip()
+        log.progress(i, len(tiles), f"queue tile {t.get('id')} {t.get('w')}x{t.get('h')}")
+        log.dump(f"upscale prompt tile {t.get('id')}", prompt)
         fs_tiles.append(
             {
                 "x": int(t["x"]),
@@ -87,6 +102,7 @@ def run_tiled_upscale(
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    log.say("handing off to FastSD generate_upscaled_image — its prints should also appear here")
     generate_upscaled_image(
         config,
         str(source_path),
@@ -97,4 +113,5 @@ def run_tiled_upscale(
         output_path=str(output_path),
         image_format=upscale_settings["output_format"],
     )
+    log.say(f"FastSD returned; output exists={output_path.is_file()} path={output_path}")
     return output_path

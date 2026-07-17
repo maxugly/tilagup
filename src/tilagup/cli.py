@@ -105,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--quiet",
         action="store_true",
-        help="Silence progress spam (default is loud — you asked for this).",
+        help="IGNORED. tilagup always prints. kept so old scripts do not crash.",
     )
     p.add_argument("--version", action="version", version=f"tilagup {__version__}")
     return p
@@ -114,9 +114,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     log.configure_stdio()
-    log.set_quiet(args.quiet)
-    if not args.quiet:
-        log.say("tilagup CLI — loud mode (pass --quiet to mute)")
+    log.set_quiet(args.quiet)  # no-op warn if set
+    log.say("tilagup — always loud. same terminal. full prompts. heartbeats. no tail -f.")
 
     if not args.resume and not args.image:
         build_parser().error("image path required unless --resume")

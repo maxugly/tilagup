@@ -73,8 +73,7 @@ def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float
     arch.save(data)
     atomic_write_text(arch.root / "base_prompt.txt", result.text)
     log.say(f"base prompt written ({len(result.text)} chars, agent={result.agent})")
-    preview = result.text if len(result.text) <= 400 else result.text[:400] + "…"
-    log.say(f"base preview:\n{preview}")
+    log.dump("BASE PROMPT (full)", result.text)
     arch.event("base_prompt_done", agent=result.agent, chars=len(result.text))
 
 
@@ -139,7 +138,7 @@ def stage_tile_prompts(
     log.kv("agents", ", ".join(a.name for a in agents))
     log.kv("already_done", already)
     log.kv("remaining", total - already)
-    log.say("you will see every tile start/finish in THIS terminal (no second pane needed)")
+    log.say("EVERY tile prints START/DONE + full prompt in THIS terminal. no tail -f.")
 
     for i, tile in enumerate(tiles):
         n = i + 1
@@ -164,6 +163,7 @@ def stage_tile_prompts(
         )
         log.progress(done_so_far, total, f"START {tile['id']} via {agent.name}")
         log.say(f"    crop: {crop}")
+        log.say(f"    geometry: x={tile['x']} y={tile['y']} w={tile['w']} h={tile['h']}")
         arch.event("tile_prompt_start", tile_id=tile["id"], agent=agent.name, index=n, total=total)
         try:
             result = agent.complete(full, timeout_s=timeout_s)
@@ -215,14 +215,13 @@ def stage_tile_prompts(
         data["stage"] = "tile_prompts"
         arch.save(data)
         done_now = sum(1 for t in data["tiles"] if t.get("prompt"))
-        preview = result.text if len(result.text) <= 220 else result.text[:220] + "…"
         log.progress(
             done_now,
             total,
             f"DONE {tile['id']} agent={result.agent} {result.duration_ms}ms",
         )
-        log.say(f"    prompt preview: {preview}")
-        log.say(f"    wrote: {tile['prompt_path']}")
+        log.dump(f"TILE PROMPT {tile['id']} (full)", result.text)
+        log.say(f"    wrote: {arch.root / tile['prompt_path']}")
         arch.event(
             "tile_prompt_done",
             tile_id=tile["id"],
