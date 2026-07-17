@@ -7,6 +7,49 @@ import sys
 from pathlib import Path
 
 
+def _fit(text: str, max_tokens: int = 75) -> tuple[str, bool]:
+    """Inline CLIP fit so worker does not depend on tilagup package install in FastSD venv."""
+    text = " ".join((text or "").split()).strip()
+    if not text:
+        return "", False
+    tok = None
+    try:
+        from transformers import CLIPTokenizer  # type: ignore
+
+        tok = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+    except Exception:
+        tok = None
+
+    def n_tokens(s: str) -> int:
+        if tok is not None:
+            return len(tok.encode(s, add_special_tokens=False))
+        return max(1, len(s.split()))
+
+    if n_tokens(text) <= max_tokens:
+        return text, False
+
+    lo, hi = 0, len(text)
+    best = ""
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        chunk = text[:mid].rsplit(" ", 1)[0].strip(" ,;:")
+        if not chunk:
+            lo = mid + 1
+            continue
+        if n_tokens(chunk) <= max_tokens:
+            best = chunk
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    if not best:
+        words = text.split()
+        best = " ".join(words[: max(8, max_tokens // 2)])
+        while best and n_tokens(best) > max_tokens:
+            words = best.split()[:-1]
+            best = " ".join(words)
+    return best, True
+
+
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     if len(args) != 1:
@@ -19,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
     if fastsd_src not in sys.path:
         sys.path.insert(0, fastsd_src)
 
+    max_tokens = int(job.get("max_clip_tokens") or 75)
+
     from state import get_context, get_settings  # type: ignore
     from models.interface_types import InterfaceType  # type: ignore
     from backend.upscale.tiled_upscale import generate_upscaled_image  # type: ignore
@@ -28,34 +73,44 @@ def main(argv: list[str] | None = None) -> int:
     config = app_settings.settings
 
     strength = float(job["strength"])
-    base_prompt = job["base_prompt"]
-    negative_prompt = job["negative_prompt"]
+    base_prompt, base_cut = _fit(job["base_prompt"], max_tokens)
+    negative_prompt, neg_cut = _fit(job["negative_prompt"], max_tokens)
+    if base_cut:
+        print(f"[tilagup-worker] CLIP-fit base prompt → {max_tokens} tokens", flush=True)
+    if neg_cut:
+        print(f"[tilagup-worker] CLIP-fit negative prompt → {max_tokens} tokens", flush=True)
+
     config.lcm_diffusion_setting.strength = strength
     config.lcm_diffusion_setting.prompt = base_prompt
     config.lcm_diffusion_setting.negative_prompt = negative_prompt
 
     tiles = job["tiles"]
-    print(f"[tilagup-worker] tiles={len(tiles)} strength={strength}", flush=True)
+    print(
+        f"[tilagup-worker] tiles={len(tiles)} strength={strength} max_clip_tokens={max_tokens}",
+        flush=True,
+    )
+
+    fs_tiles = []
     for i, t in enumerate(tiles):
-        p = (t.get("prompt") or base_prompt)[:80]
+        raw = (t.get("prompt") or job["base_prompt"] or "").strip()
+        prompt, cut = _fit(raw, max_tokens)
+        flag = " TRUNCATED" if cut else ""
         print(
-            f"[tilagup-worker] queue {i+1}/{len(tiles)} "
-            f"id={t.get('id')} {t['w']}x{t['h']} prompt={p!r}…",
+            f"[tilagup-worker] {i+1}/{len(tiles)} id={t.get('id')} "
+            f"{t['w']}x{t['h']}{flag} prompt={prompt!r}",
             flush=True,
         )
-
-    fs_tiles = [
-        {
-            "x": int(t["x"]),
-            "y": int(t["y"]),
-            "w": int(t["w"]),
-            "h": int(t["h"]),
-            "mask_box": None,
-            "prompt": (t.get("prompt") or base_prompt or "").strip(),
-            "scale_factor": float(job["scale_factor"]),
-        }
-        for t in tiles
-    ]
+        fs_tiles.append(
+            {
+                "x": int(t["x"]),
+                "y": int(t["y"]),
+                "w": int(t["w"]),
+                "h": int(t["h"]),
+                "mask_box": None,
+                "prompt": prompt,
+                "scale_factor": float(job["scale_factor"]),
+            }
+        )
 
     output_path = job["output_path"]
     upscale_settings = {

@@ -102,6 +102,8 @@ def run_tiled_upscale(
         "base_prompt": base_prompt,
         "negative_prompt": negative_prompt,
         "tiles": tiles,
+        # SD1.5 / turbo CLIP limit is 77; leave headroom
+        "max_clip_tokens": int(os.environ.get("TILAGUP_MAX_CLIP_TOKENS", "75")),
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
