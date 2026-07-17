@@ -1,14 +1,22 @@
-"""Always-on terminal noise. This tool is for a human watching the run.
-
-No quiet mode. No “progress goes to a log file you can tail.” If it happened,
-it prints to the terminal (stdout + stderr, flushed hard).
-"""
+"""Loud by default. --quiet exists if you actually want silence."""
 
 from __future__ import annotations
 
 import sys
 from datetime import datetime
 from typing import Any
+
+
+_quiet = False
+
+
+def set_quiet(quiet: bool) -> None:
+    global _quiet
+    _quiet = bool(quiet)
+
+
+def is_quiet() -> bool:
+    return _quiet
 
 
 def configure_stdio() -> None:
@@ -24,8 +32,9 @@ def _ts() -> str:
 
 
 def _emit(msg: str) -> None:
+    if _quiet:
+        return
     line = f"[{_ts()}] {msg}"
-    # Both streams, always flush — stubborn terminals / uv wrappers still see it
     for stream in (sys.stdout, sys.stderr):
         try:
             print(line, file=stream, flush=True)
@@ -38,6 +47,8 @@ def say(msg: str = "", **_ignored: Any) -> None:
 
 
 def banner(title: str) -> None:
+    if _quiet:
+        return
     line = "═" * max(12, min(72, len(title) + 8))
     block = f"\n{line}\n  {title}\n{line}"
     for stream in (sys.stdout, sys.stderr):
@@ -52,6 +63,8 @@ def kv(key: str, value: Any) -> None:
 
 
 def progress(current: int, total: int, label: str = "") -> None:
+    if _quiet:
+        return
     total = max(total, 1)
     width = 24
     filled = int(width * current / total)
@@ -62,7 +75,9 @@ def progress(current: int, total: int, label: str = "") -> None:
 
 
 def dump(title: str, text: str) -> None:
-    """Print a multi-line blob with a header (full prompts, no truncation)."""
+    """Print a multi-line blob with a header (full prompts). Suppressed when quiet."""
+    if _quiet:
+        return
     _emit(f"──── {title} ────")
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -73,14 +88,11 @@ def dump(title: str, text: str) -> None:
 
 
 def always(msg: str = "", **_ignored: Any) -> None:
-    _emit(msg)
-
-
-# Back-compat no-ops so old call sites don't break
-def set_quiet(_quiet: bool) -> None:
-    if _quiet:
-        _emit("note: --quiet is ignored. this tool does not do quiet.")
-
-
-def is_quiet() -> bool:
-    return False
+    """Final summary / hard errors — still prints when --quiet."""
+    line = msg
+    # keep errors visible on stderr; summaries on both
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            print(line, file=stream, flush=True)
+        except Exception:
+            pass

@@ -45,7 +45,7 @@ tilagup/
 
 1. **AGENTS.md in every directory.** Read it before editing files there.
 2. **Run archives are sacred.** Layout is `runs/<image_key>/<run_id>/`. Never delete without explicit human OK. Prefer append-only `events.log` + update `run.json`.
-3. **Always loud.** Print everything to the same terminal: full prompts, agent argv/output, heartbeats, tile N/M, upscale queue. No quiet mode, no “tail the log file” UX. Solo operator tool — information flows.
+3. **Loud by default.** Print everything to the same terminal: full prompts, agent argv/output, heartbeats, tile N/M, upscale queue. `--quiet` mutes progress (final summary still prints). No “tail the log file” UX.
 4. **Base-locked tile prompts.** Every tile prompt must stay inside the base style/subject. Variation is local detail, not new global subjects.
 5. **Reuse FastSD blend.** Do not invent a new paste path. Feed `tiles[]` into FastSD’s tiled upscaler (overlap + soft mask).
 6. **Agent output is boring.** Vision agents must return prompt text only (or write a file). Parse failures → one retry → log + fail tile.

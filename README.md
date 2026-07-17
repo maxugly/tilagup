@@ -67,7 +67,7 @@ Creates `runs/<image_key>/<run_id>/` with:
 | `tiles/r00_c00.prompt.txt` | Tile prompt text |
 | `tiles/r00_c00.meta.json` | Per-tile agent attribution |
 
-CLI is **always loud** — same terminal, full prompts, agent output, 5s heartbeats while waiting, upscale tile queue. No quiet mode. No second-terminal log tailing.
+CLI is **loud by default** — same terminal, full prompts, agent output, 5s heartbeats, upscale tile queue. Pass `--quiet` to mute progress (final path summary still prints).
 
 ### Real upscale
 

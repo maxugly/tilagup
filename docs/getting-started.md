@@ -40,7 +40,7 @@ uv run up.py /path/to/image.png \
 
 Everything prints in the **same terminal** (dry-run and full upscale): tile bars, full
 prompts, agent argv/output, heartbeats every 5s while waiting, FastSD handoff spam.
-No second pane. No quiet mode. Watch the job where you launched it.
+No second pane. Default is loud; `--quiet` mutes progress only.
 
 Expected (also lots of live progress lines — loud by default):
 
