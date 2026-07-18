@@ -50,7 +50,7 @@ Named dry-run + upscale scripts so you don’t remember flags. See [`presets/REA
 ./presets/grit_upscale.sh          # newest run, or pass a runs/... path
 ```
 
-Bundled: `default`, **`photo_soft`** (best photo preserve), `grit`, `grit_hot`, `smooth`, `stub_smoke`. Copy a pair to make your own.
+Bundled: `default`, **`photo_soft`**, **`cartoon_ink`** (Waldo/comic), `grit`, `grit_hot`, `smooth`, `stub_smoke`. Copy a pair to make your own.
 
 ## Quickstart (what works now)
 

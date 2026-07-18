@@ -32,12 +32,15 @@ cd /home/m/snc/cod/tilagup   # or any dir; scripts find the repo
 |------|---------|----------------|
 | `default` | agent both, variation 0.35 | strength 0.28, texture **none** (stock look) |
 | **`photo_soft`** | both, variation **0.20** | strength **0.18**, texture **none** — **best photo preserve on this stack** |
+| **`cartoon_ink`** | both, variation **0.40** | strength **0.32**, texture **none**, negatives ban **photo/3d** (not cartoon) — Waldo / comic / flat ink |
 | `grit` | same | strength 0.28, texture **grit** |
 | `grit_hot` | same | strength **0.40**, texture grit |
 | `smooth` | same | strength 0.28, texture **smooth** |
 | `stub_smoke` | agent **stub** (no live LLMs) | strength 0.28, texture none (CI / wiring check) |
 
 **Photo tip:** For real photos (crowds, landscapes), use `photo_soft_*`. Higher strength / grit tends to invent generic people and smooth “poster” water on sd-turbo.
+
+**Cartoon tip:** Default negatives ban `cartoon` / `drawing` / `illustration` — bad for Waldo-style art. Use `cartoon_ink_*` so upscale negatives push away photoreal instead.
 
 ## Add your own
 
