@@ -209,13 +209,19 @@ def stage_tile_prompts(
     log.kv("remaining", total - already)
     log.say("EVERY tile prints START/DONE + full prompt in THIS terminal. no tail -f.")
 
-    for i, tile in enumerate(tiles):
-        n = i + 1
-        done_so_far = sum(1 for t in tiles if t.get("prompt"))
-        if tile.get("prompt") and not force:
-            log.progress(done_so_far, total, f"skip {tile['id']} (already prompted)")
-            arch.event("skip_tile_prompt", tile_id=tile["id"])
-            continue
+    # Track work in this pass so --force/--reprompt doesn't show 64/64 forever
+    completed_this_pass = 0
+    to_do = [
+        i
+        for i, t in enumerate(tiles)
+        if force or not t.get("prompt")
+    ]
+    n_todo = len(to_do)
+    log.kv("to_prompt_this_pass", n_todo)
+
+    for pass_i, i in enumerate(to_do):
+        tile = tiles[i]
+        n = i + 1  # absolute tile index in grid
         agent = pick_for_index(agents, i)
         crop = arch.root / tile["crop_path"]
         user = tile_user_message(
@@ -227,9 +233,12 @@ def stage_tile_prompts(
             variation=variation,
         )
         full = BASE_SYSTEM + "\n\n" + user
-        log.progress(done_so_far, total, f"START {tile['id']} via {agent.name}")
-        log.say(f"    crop: {crop}")
-        log.say(f"    geometry: x={tile['x']} y={tile['y']} w={tile['w']} h={tile['h']}")
+        log.progress(
+            completed_this_pass,
+            n_todo,
+            f"START {tile['id']} ({pass_i + 1}/{n_todo}) via {agent.name}",
+        )
+        log.say(f"    crop: {crop.name}  x={tile['x']} y={tile['y']} w={tile['w']} h={tile['h']}")
         arch.event("tile_prompt_start", tile_id=tile["id"], agent=agent.name, index=n, total=total)
         try:
             result = agent.complete(full, timeout_s=timeout_s)
@@ -285,15 +294,16 @@ def stage_tile_prompts(
         data["agents_used"] = sorted(used)
         data["stage"] = "tile_prompts"
         arch.save(data)
-        done_now = sum(1 for t in data["tiles"] if t.get("prompt"))
+        completed_this_pass += 1
         log.progress(
-            done_now,
-            total,
+            completed_this_pass,
+            n_todo,
             f"DONE {tile['id']} agent={result.agent} "
             f"words={len(result.text.split())} clip≈{tile['token_len']}",
         )
-        log.dump(f"TILE PROMPT {tile['id']} (full)", result.text)
-        log.say(f"    wrote: {arch.root / tile['prompt_path']}")
+        # Result only (not the LLM instruction boilerplate)
+        log.say(f"    prompt: {result.text}")
+        log.say(f"    wrote: {tile['prompt_path']}")
         arch.event(
             "tile_prompt_done",
             tile_id=tile["id"],
@@ -302,6 +312,11 @@ def stage_tile_prompts(
             token_len=tile["token_len"],
             duration_ms=result.duration_ms,
         )
+
+    # note skips if any
+    skipped = total - n_todo
+    if skipped:
+        log.say(f"skipped {skipped} tiles that already had prompts (use --force / --reprompt-tiles)")
 
 
 def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:

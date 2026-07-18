@@ -79,14 +79,29 @@ def run_argv(
     from tilagup import log
 
     t0 = time.perf_counter()
-    log.say(f">>> SPAWN {cli}  agent={agent}  timeout={timeout_s}s")
-    log.say(f"    full argv ({len(argv)} parts):")
+    log.say(f">>> SPAWN {cli}  agent={agent}  timeout={timeout_s}s  pid=(pending)")
+    # Do NOT dump the full -p instruction body every tile — same boilerplate 64×.
+    # Show a short fingerprint; the *result* prompt is logged fully after.
     for i, part in enumerate(argv):
-        # show each arg; huge -p bodies get dumped fully so you see the ask
-        if len(part) > 200:
-            log.dump(f"argv[{i}]", part)
+        if i == 0:
+            log.say(f"    cmd: {part}")
+        elif part in ("-p", "--prompt", "--print"):
+            continue
+        elif len(part) > 120:
+            # instruction / user blob: one-line summary only
+            one = " ".join(part.split())
+            head = one[:100] + ("…" if len(one) > 100 else "")
+            # pull tile id if present for grepping
+            tid = ""
+            if "Tile id=" in part:
+                try:
+                    tid = part.split("Tile id=", 1)[1].split(".", 1)[0].strip()
+                    tid = f" tile={tid}"
+                except Exception:
+                    pass
+            log.say(f"    -p ({len(part)} chars){tid}: {head}")
         else:
-            log.say(f"      [{i}] {part!r}")
+            log.say(f"    arg: {part!r}")
     try:
         proc = subprocess.Popen(
             argv,
