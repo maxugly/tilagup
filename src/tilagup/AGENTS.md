@@ -1,27 +1,30 @@
 # AGENTS.md — src/tilagup/
 
-> *For autonomous agents editing library code.*
+> *Library code. Read root AGENTS.md + design/zones.md before adding zone stages.*
 
 ## Package map
 
-| Module | Responsibility |
-|--------|----------------|
-| `cli.py` | argparse entry, orchestrates stages |
-| `archive.py` | run dir creation, `run.json`, events.log, resume |
-| `tiles.py` | grid math, crop export, overlap |
-| `pipeline.py` | stage machine: init → base → split → tile prompts → upscale → done |
-| `upscale_fastsd.py` | FastSD CPU tiled upscale integration |
-| `prompts_lib.py` | system/user prompt templates for vision agents |
-| `agents/` | CLI adapters (`agy`, `grok`) |
+| Module | Responsibility | Zones note |
+|--------|----------------|------------|
+| `cli.py` | argparse, orchestration entry | Future: `--no-zones`, `--zones-json` |
+| `pipeline.py` | Stage machine | Insert `zones` → `assign` → `zone_prompts` before tile prompts |
+| `archive.py` | `runs/<image_key>/<run_id>/` | Add `zones/` writers when implementing |
+| `tiles.py` | Grid math, crop export | Execution grid only; assignment is separate |
+| `prompts_lib.py` | Agent prompt templates | Add zone discovery + zone prompt templates |
+| `clip_fit.py` | CLIP unique-first fit | Tile fit should prefer local over zone restatement |
+| `log.py` | Loud / quiet logging | Keep progress in-process |
+| `upscale_fastsd.py` | Spawn FastSD worker | Pass zone-aware prompts via job JSON as plain tile prompts |
+| `upscale_worker.py` | Runs in FastSD venv | Stay free of tilagup package imports if possible |
+| `agents/` | agy / grok / stub | Zone discovery may need JSON-mode cleanup |
 
 ## Rules
 
-1. **Atomic writes** to `run.json` (write temp + rename) so a crash mid-write does not corrupt.
-2. **Never require GPU** to import the package or run unit tests for split/archive.
-3. **Stages are idempotent:** if `run.json` already has base prompt text, skip re-prompt unless `--force`.
-4. FastSD is optional at import time; fail only when upscale stage runs without `FASTSDCPU_ROOT`.
-5. Tile prompts always receive `base_prompt` + variation + crop path in the agent call.
+1. **Zones = meaning; tiles = execution.** Do not replace FastSD soft-mask blend.  
+2. Flat path (`base → tiles`) must keep working as `--no-zones` until zones are default.  
+3. Atomic `run.json` writes.  
+4. Unit tests: no live agents, no model load. Zone assignment tests = pure geometry.  
+5. CLIP: unique-first; never “fix” quality by only head-truncating long essays.
 
-## Tests
+## Target stage order
 
-Unit tests live in `tests/` and must not call live agents or load SD models.
+`init` → `zones` → `base_prompt` → `split` → `assign` → `zone_prompts` → `tile_prompts` → dry-run or `upscale` → `done`

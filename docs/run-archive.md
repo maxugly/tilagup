@@ -1,39 +1,60 @@
 # Run archive format
 
+**Last updated:** 2026-07-17
+
 Every invocation creates (or resumes) a directory under `runs/`. This is the source of truth for slow jobs.
 
-## Directory layout
-
-Each **image** gets its own folder; each **attempt** is a timestamped run under that:
+## Directory layout (current + target)
 
 ```text
 runs/
-  <image_key>/                    # e.g. HIsharp__a1b2c3
-    <run_id>/                     # e.g. 20260717_045012_ab12
-      run.json                    # authoritative machine state
-      events.log                  # append-only NDJSON trail
-      source.<ext>                # copy of input
+  <image_key>/                         # stem + short path hash
+    <run_id>/                          # 20260717_045012_ab12
+      run.json                         # authoritative machine state
+      events.log                       # append-only NDJSON trail
+      source.<ext>
       base_prompt.txt
       tiles/
         r00_c00.png
         r00_c00.prompt.txt
         r00_c00.meta.json
         …
-      output.png                  # after SD stage
+      upscale_job.json                 # written at upscale handoff
+      output.png                       # after SD
+
+      # --- when zones ship ---
+      zone_map.json                    # tile_id → zone_id
+      zones/
+        z_fire.json
+        z_fire.prompt.txt
+        z_fire.png                     # optional bbox crop
 ```
 
-`image_key` = sanitized stem + short hash of the absolute path (same filename from different places won’t collide).  
-`run_id` looks like `20260717_045012_ab12`.
+`image_key` = sanitized stem + short hash of absolute path.  
+`run_id` = timestamp + short random.
 
-Progress is **loud by default** (stage banners, tile N/M, agent stdout). Use `--quiet` only if you really want silence.
+## Stages
 
-## `run.json` (core fields)
+| `stage` | Meaning |
+|---------|---------|
+| `init` | Directory created, source copied |
+| `zones` | *(planned)* Zone discovery done |
+| `base_prompt` | Base prompt written |
+| `split` | Tiles exported |
+| `assign` | *(planned)* Tiles assigned to zones |
+| `zone_prompts` | *(planned)* Per-zone prompts written |
+| `tile_prompts` | Tile prompts in progress / done |
+| `dry_run_complete` | Prompts done; SD skipped |
+| `done` | Upscale finished |
+| `upscale_failed` | SD stage errored; safe to resume after fix |
+
+## `run.json` (core fields today)
 
 ```json
 {
   "run_id": "20260717_045012_ab12",
   "image_key": "HIsharp__a1b2c3",
-  "created_at": "2026-07-17T04:50:12+00:00",
+  "created_at": "…",
   "updated_at": "…",
   "stage": "dry_run_complete",
   "source": {
@@ -56,6 +77,7 @@ Progress is **loud by default** (stage banners, tile N/M, agent stdout). Use `--
   },
   "base_prompt": {
     "text": "…",
+    "token_len": 42,
     "attribution": {
       "agent": "agy",
       "cli": "agy",
@@ -78,17 +100,14 @@ Progress is **loud by default** (stage banners, tile N/M, agent stdout). Use `--
       "prompt_path": "tiles/r00_c00.prompt.txt",
       "meta_path": "tiles/r00_c00.meta.json",
       "prompt": "…",
-      "attribution": {
-        "agent": "grok",
-        "cli": "grok",
-        "model": null,
-        "duration_ms": 8000,
-        "created_at": "…"
-      },
+      "token_len": 38,
+      "zone_id": null,
+      "attribution": { "agent": "grok", "cli": "grok", "…": "…" },
       "status": "prompted",
       "error": null
     }
   ],
+  "zones": [],
   "agents_used": ["agy", "grok"],
   "output": null,
   "error": null,
@@ -96,27 +115,29 @@ Progress is **loud by default** (stage banners, tile N/M, agent stdout). Use `--
 }
 ```
 
-## Stages
+### Planned fields (zones)
 
-| `stage` | Meaning |
-|---------|---------|
-| `init` | Directory created, source copied |
-| `base_prompt` | Base prompt written |
-| `split` | Tiles exported |
-| `tile_prompts` | At least some tile prompts written (final when all done) |
-| `dry_run_complete` | Prompts done; SD skipped |
-| `done` | Upscale finished |
-| `upscale_failed` | SD stage errored; safe to `--resume` after fix |
+- `zones`: array of zone records (`id`, `label`, `bbox`, `prompt`, `attribution`, `tile_ids`)  
+- `tiles[].zone_id`: primary zone  
+- `tiles[].zone_ids_secondary`: boundary overlaps  
+- top-level or file `zone_map.json` for quick inspection  
 
-## Who did what
-
-- **Base:** `run.json` → `base_prompt.attribution.agent`
-- **Per tile:** `tiles[i].attribution.agent` and `tiles/<id>.meta.json`
-- **Set of agents:** `agents_used[]`
-- **Timeline:** `events.log` (NDJSON) and truncated `events` array in `run.json`
+See [design/zones.md](../design/zones.md).
 
 ## Coordinates
 
-`x, y, w, h` are **source image pixels**, FastSD-compatible. Overlap is baked into non-edge crop sizes the same way FastSD’s tiled upscaler expects.
+`x, y, w, h` are **source image pixels**, FastSD-compatible. Overlap is baked into non-edge crop sizes.
 
-Last updated: 2026-07-17
+Zone `bbox` values (planned) are **normalized** `[0,1]` on the full image.
+
+## Who did what
+
+- Base: `base_prompt.attribution`  
+- Zone *(planned)*: `zones[i].attribution`  
+- Tile: `tiles[i].attribution` + `tiles/<id>.meta.json`  
+- Set: `agents_used[]`  
+- Timeline: `events.log`
+
+## Progress
+
+Loud CLI prints stage banners, tile N/M, agent streams, heartbeats. `events.log` mirrors machine events; you should not need a second terminal to know the job is alive.

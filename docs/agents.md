@@ -1,16 +1,18 @@
 # Vision agents
 
-How tilagup talks to **`agy`** and **`grok`**, and how credit is stored.
+**Last updated:** 2026-07-17
 
-## Binaries (literally)
+How tilagup talks to **`agy`**, **`grok`**, and **`stub`**, and how credit is stored.
 
-| Agent id | CLI binary | Headless flags |
-|----------|------------|----------------|
+## Binaries
+
+| Agent id | Binary | Headless |
+|----------|--------|----------|
 | `agy` | `agy` | `agy -p "…" --dangerously-skip-permissions` |
 | `grok` | `grok` | `grok -p "…" --yolo` |
-| `stub` | *(in-process)* | No CLI; deterministic offline prompts for CI |
+| `stub` | *(in-process)* | Offline CI; no network |
 
-There is no `antigravity` wrapper in this project. Use **`agy`**.
+Use **`agy`**, not `antigravity`.
 
 ## Modes (`--agent`)
 
@@ -18,38 +20,36 @@ There is no `antigravity` wrapper in this project. Use **`agy`**.
 |-------|----------|
 | `agy` | All prompts via `agy` |
 | `grok` | All prompts via `grok` |
-| `both` | Base prompt uses first available (agy preferred in list order); tiles **alternate** `agy`, `grok`, … |
-| `stub` | Offline stub agent — full pipeline dry-run without live vision CLIs |
+| `both` | Alternate across tiles (base uses first in list = agy first) |
+| `stub` | Deterministic offline prompts |
 
-Assignment is recorded per tile so you can see who wrote each prompt in `run.json`.
+Assignment is stored per prompt in `run.json`.
 
-### Stub agent
+## What they write (today)
 
-```bash
-uv run up.py sample.png --agent stub --dry-run
-```
+### Base
 
-Writes real `run.json` / tile files with `attribution.agent = "stub"` and `model = "stub-v1"`. Used by automated tests; not for production upscales.
+Short CLIP-safe overall prompt (≤~50 words): subject, materials, light, palette.
 
-## What the agent receives
+### Tile
 
-### Base prompt
+Short prompt for **this crop only**, **unique-first** (local detail before shared style). Must not restate the entire global scene. Variation knob controls how much invention is allowed.
 
-- System-style instructions: SD prompt only, no markdown
-- Absolute path to the full source image copy under the run dir
+If the agent returns an essay, tilagup does **one rewrite pass** demanding ≤50 words / ≤75 CLIP tokens.
 
-### Tile prompt
+### Zones (planned)
 
-- Locked **base prompt** text
-- Tile id / row / col
-- Absolute path to that tile’s crop PNG
-- Variation language (derived from `--variation`)
+1. **Discovery:** JSON zone list with normalized bboxes (structured output).  
+2. **Zone prompt:** short identity for that region.  
+3. **Tile:** unique-local under locked zone prompt (same rules as today + zone spine).
 
-## Output contract
+See [zones.md](zones.md) and [design/zones.md](../design/zones.md).
 
-Agents must return **prompt text only**. Adapters strip markdown fences and common preambles. Empty output → retry once → fail tile (status `failed`, error string stored).
+## CLIP limit
 
-## Attribution object
+SD1.5 / turbo OpenVINO path: **~77 tokens**. Upscale worker unique-first fits to ~75. Do not rely on head-truncation of long base+local essays — regenerate with `--reprompt-tiles` instead of “repairing” by chopping.
+
+## Attribution
 
 ```json
 {
@@ -61,14 +61,12 @@ Agents must return **prompt text only**. Adapters strip markdown fences and comm
 }
 ```
 
-Stored on `base_prompt` and each `tiles[]` entry, plus `tiles/<id>.meta.json`.
+On `base_prompt`, each `tiles[]` entry, and (planned) each zone.
 
 ## Timeouts
 
-`--timeout` (default 300s) applies per agent call. Upscale is separate and can run much longer.
+`--timeout` (default 300s) per agent call. Upscale is separate and can run much longer; worker heartbeats while FastSD runs.
 
-## Offline / CI
+## Loud I/O
 
-Unit tests never call live agents. For dry-run without agents you would need a future stub agent — not in v0.1.
-
-Last updated: 2026-07-17
+Agent argv (including prompt body), streamed stdout/stderr, and 5s heartbeats print in the **same terminal** unless `--quiet`.

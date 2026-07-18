@@ -1,16 +1,19 @@
 # Getting started
 
-Prerequisites, dry-run, and first real upscale.
+**Last updated:** 2026-07-17
+
+End-to-end dry-run and upscale with the **current flat-grid** pipeline.  
+Zones (semantic regions) are designed next — see [zones.md](zones.md) and [design/zones.md](../design/zones.md).
 
 ## Prerequisites
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
-- For real prompts: at least one vision CLI on `PATH`:
-  - **`agy`** — headless (`agy -p "…"`)
-  - **`grok`** — headless (`grok -p "…"`)
-- For offline CI / plumbing checks: `--agent stub` (no external CLI)
-- For actual SD upscale (not dry-run): a [FastSD CPU](https://github.com/rupeshs/fastsdcpu) checkout and `FASTSDCPU_ROOT` pointing at it
+- For real prompts: `agy` and/or `grok` on `PATH`
+- For offline plumbing tests: `--agent stub`
+- For upscale: FastSD CPU checkout + `FASTSDCPU_ROOT`  
+  - fish (persistent): `set -Ux FASTSDCPU_ROOT /path/to/fastsdcpu`  
+  - No FastSD web server required
 
 ## Install
 
@@ -21,15 +24,7 @@ uv sync
 
 ## Dry-run (recommended first)
 
-Creates a full run archive: base prompt, tile crops, per-tile prompts, attribution JSON. **No** diffusion.
-
-Offline smoke (no `agy`/`grok` required):
-
-```bash
-uv run up.py /path/to/image.png --agent stub --dry-run
-```
-
-Live agents:
+Real agent prompts, **no** diffusion. Watch the **same terminal** (loud by default).
 
 ```bash
 uv run up.py /path/to/image.png \
@@ -38,73 +33,94 @@ uv run up.py /path/to/image.png \
   --dry-run
 ```
 
-Everything prints in the **same terminal** (dry-run and full upscale): tile bars, full
-prompts, agent argv/output, heartbeats every 5s while waiting, FastSD handoff spam.
-No second pane. Default is loud; `--quiet` mutes progress only.
+Offline smoke:
 
-Expected (also lots of live progress lines — loud by default):
-
-```text
-run_id:     20260717_…
-image_key:  yourname__a1b2c3
-path:       runs/yourname__a1b2c3/20260717_…
-stage:      dry_run_complete
-tiles:      N
-agents:     agy, grok
-json:       runs/…/run.json
+```bash
+uv run up.py /path/to/image.png --agent stub --dry-run
 ```
 
-Inspect:
+Expected artifacts under `runs/<image_key>/<run_id>/`:
+
+- `run.json`, `events.log`, `source.*`
+- `base_prompt.txt`
+- `tiles/rXX_cYY.png` + `.prompt.txt` + `.meta.json`
+
+CLI prints `path:` / `json:` when finished. Stage: `dry_run_complete`.
+
+### Inspect prompts
 
 ```bash
 set run runs/<image_key>/<run_id>
-less $run/base_prompt.txt
-ls $run/tiles/
-jq '.tiles[] | {id, agent: .attribution.agent, status}' $run/run.json
+cat $run/base_prompt.txt
+# word / token-ish length
+wc -w $run/tiles/*.prompt.txt | sort -n | tail
 ```
 
-## Real upscale
+Prompts should stay short (≤~50 words). Unique local detail should lead. If a run still has long essays from an older build:
 
 ```bash
-export FASTSDCPU_ROOT=/path/to/fastsdcpu
-uv run up.py /path/to/image.png \
-  --agent both \
-  --variation 0.35 \
-  --strength 0.28 \
-  --scale 2
+uv run up.py --resume $run --reprompt-tiles
 ```
 
-Output lands at `runs/<id>/output.png`. Progress is appended to `events.log` and mirrored in `run.json`.
+## Upscale
+
+Only after you like the prompts:
+
+```bash
+# FASTSDCPU_ROOT already set in your shell
+uv run up.py --resume runs/<image_key>/<run_id> --continue-upscale
+```
+
+Uses FastSD’s own venv Python. Per-tile prompts go through unique-first CLIP fit (~75 tokens) so local detail is preferred over restated base fluff.
+
+Output: `runs/.../output.png`, stage `done`.
 
 ## Resume
-
-If a run dies mid-prompting or mid-upscale:
 
 ```bash
 uv run up.py --resume runs/<image_key>/<run_id>
 ```
 
-Completed base/tile prompts are skipped unless you pass `--force`.
+Without `--dry-run`, a completed dry-run continues to upscale.  
+With `--dry-run` on an already complete dry-run: no-op unless `--reprompt-tiles` / `--force`.
 
-## Flags cheat sheet
+## Flags
 
 | Flag | Default | Notes |
 |------|---------|--------|
-| `--agent` | `both` | `agy` / `grok` / `both` (alternate tiles) |
-| `--variation` | `0.35` | Prompt drift from base (0..1) |
+| `--agent` | `both` | `agy` / `grok` / `both` / `stub` |
+| `--variation` | `0.35` | Prompt drift guidance |
 | `--strength` | `0.28` | SD img2img strength |
 | `--tile-size` | `256` | Grid stride |
 | `--overlap` | `32` | Soft blend region |
 | `--dry-run` | off | Prompts only |
+| `--continue-upscale` | off | After dry-run → SD |
+| `--reprompt-tiles` | off | Wipe + regenerate tile prompts |
+| `--quiet` | off | Mute progress |
 | `--force` | off | Redo stages |
+
+## Architecture reminder
+
+```text
+target:  base → zones → tiles → FastSD
+today:   base → tiles (flat) → FastSD
+```
+
+When zones land, dry-run will also write `zones/` + `zone_map.json`. Until then, flat is the testable path.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `agent CLI not on PATH: agy` | Install/link `agy`; or `--agent grok` |
-| `FastSD CPU not found` | `export FASTSDCPU_ROOT=…` or use `--dry-run` |
-| Quilt / seams | Lower `--variation` and/or `--strength`; ensure overlap ≥ 16 |
-| Agent returns essays | Templates already demand prompt-only; check `tiles/*.meta.json` raw via events |
+| `agent CLI not on PATH` | Install `agy`/`grok`, or `--agent stub` |
+| `FastSD CPU not found` | `set -Ux FASTSDCPU_ROOT …` |
+| `No module named 'yaml'` / missing torch | Fixed by worker using FastSD venv — update code; do not install torch into tilagup |
+| CLIP truncate / long prompts | `--reprompt-tiles`; agents must stay short |
+| Quilt / seams | Lower `--variation` / `--strength`; zones will help when shipped |
+| Blank terminal | Old build; current code is loud in-process |
 
-Last updated: 2026-07-17
+## Related
+
+- [Run archive](run-archive.md)
+- [Agents](agents.md)
+- [Zones](zones.md)

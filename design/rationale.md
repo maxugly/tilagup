@@ -1,56 +1,75 @@
-# Rationale — tilagup core design
+# Rationale — tilagup
+
+**Last updated:** 2026-07-17
 
 ## Context
 
-FastSD CPU’s tiled SD upscale already supports a **per-tile prompt** and soft masks. Humans cannot cheaply write N good tile prompts for weird images. Vision CLIs (`agy`, `grok`) can, if we keep a shared base and log everything (upscale is slow).
+FastSD CPU’s tiled SD upscale already supports a **per-tile prompt** and soft masks. Humans cannot cheaply write N good tile prompts. Vision CLIs (`agy`, `grok`) can — if hierarchy and CLIP limits are respected, and slow jobs are fully archived.
 
 ## Decisions
 
 ### 1. Archive-first runs
 
-**Decision:** Every job is a directory under `runs/` with `run.json` + `events.log` before any expensive work.
+**Decision:** Every job is `runs/<image_key>/<run_id>/` with `run.json` + `events.log` before expensive work.
 
-**Why:** CPU/OpenVINO upscales take a long time. Crash recovery and “who wrote this prompt?” both need durable state.
+**Why:** Upscales take a long time. Crash recovery and “who wrote this?” need durable state. Per-image folders keep attempts for the same source together.
 
-### 2. Base-locked tile prompts
+### 2. Hierarchy: base → zones → tiles
 
-**Decision:** Base prompt first; every tile prompt is instructed to stay inside that style/subject. `--variation` only scales how much local invention is allowed.
+**Decision:** Semantic **zones** (meaning) sit between global base and execution tiles. See `design/zones.md`.
 
-**Why:** Independent free-form tile prompts produce quilts. Temperature alone is not enough.
+**Why:** Flat independent tile prompts under-use agents and quilt easily. A racecar strip or pickle pile is one zone spanning many tiles; shared zone identity keeps coherence while tiles add local depth.
 
-### 3. Crops on disk, blend in FastSD
+**Status:** Designed; flat path shipped first so the pipeline could be tested end-to-end.
 
-**Decision:** Export overlapping crops for agents and attribution; feed the same geometry into FastSD’s `tiles[]` rather than paste ourselves.
+### 3. Tiles remain the execution grid
 
-**Why:** Soft masks and overlap already exist. Reimplementing stitching is wasted risk.
+**Decision:** Keep FastSD’s overlapping grid + soft masks. Assign tiles to zones by overlap; do not invent a new paste path.
 
-### 4. Dual agents with attribution
+**Why:** Blend quality already exists. Zones change *prompts*, not geometry of stitching.
 
-**Decision:** Support `agy` and `grok`, optional `both` alternating, always record `attribution.agent` per prompt.
+### 4. CLIP-safe unique-first prompts
 
-**Why:** User asked to maximize variation without inventing seams, and to know who did what.
+**Decision:** Agent templates demand ≤~50 words; rewrite if long; upscale worker CLIP-fits with unique-first (strip restated base, keep local, then style tail). Max ~75 tokens for SD1.5/turbo.
 
-### 5. Dry-run before SD
+**Why:** CLIP drops tokens beyond ~77. Head-truncating long essays kills the unique tail — defeating per-tile work. Unique-first is non-negotiable.
 
-**Decision:** `--dry-run` completes base + split + tile prompts and stops.
+### 5. Loud CLI by default
 
-**Why:** Inspect prompts before burning an hour of upscale.
+**Decision:** Progress, full prompts, agent streams, heartbeats in the **same** terminal. `--quiet` exists but is opt-in.
 
-### 6. `agy` means `agy`
+**Why:** Dry-run exists to watch and judge. Silent tools are unusable for this workflow.
 
-**Decision:** Adapter invokes the `agy` binary only.
+### 6. FastSD in FastSD’s venv
 
-**Why:** Explicit user correction — not `antigravity`, not aliases that hang.
+**Decision:** Upscale worker runs under `FASTSDCPU_ROOT/env/bin/python`, not tilagup’s slim venv.
 
-## Non-goals (v0.1)
+**Why:** torch/openvino/diffusers live there. tilagup stays light; no need for a FastSD HTTP server.
 
-- Interactive prompt editing UI
-- Multi-pass hierarchical “growth” (gem.md-style stages)
-- Named semantic zones (brain/flame) without a grid
-- Parallel agent fan-out
+### 7. Dual live agents + stub
+
+**Decision:** `agy`, `grok`, `both` (alternate), `stub` for CI.
+
+**Why:** Attribution + variation; stub exercises the full dry-run without network.
+
+### 8. Dry-run before SD
+
+**Decision:** `--dry-run` completes prompts and stops; `--continue-upscale` / resume without dry-run runs SD.
+
+**Why:** Inspect prompts (and later zone maps) before burning hours.
+
+## Rejected / deferred
+
+| Idea | Why not now |
+|------|-------------|
+| Quiet-by-default CLI | Operator cannot test dry-runs |
+| Head-truncate long prompts only | Destroys unique tile content |
+| Replace grid with freeform regions only | Loses FastSD soft-mask path |
+| Interactive prompt UI | After zones land |
+| Parallel agent fan-out | Nice; sequential is fine for v0.1 |
 
 ## Consequences
 
-- CLI surface stays small: `up.py` + resume + dry-run.
-- JSON schema in `docs/run-archive.md` is part of the product.
-- FastSD remains an external runtime dependency via `FASTSDCPU_ROOT`.
+- Docs and `run.json` must grow zone fields without breaking flat runs (`--no-zones`).  
+- Zone discovery quality is the main product bet after the flat path is proven.  
+- Archive layout under `zones/` is part of the product, not an afterthought.

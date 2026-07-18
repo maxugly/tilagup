@@ -5,109 +5,119 @@
 ## Project Identity
 
 - **Name:** tilagup (tiled agent upscale)
-- **Type:** CLI tool + library for agent-driven tiled SD upscaling
+- **Type:** CLI + library for agent-driven tiled SD upscaling
 - **Language:** Python 3.11+
 - **Version:** 0.1.0-prealpha
 - **Entry:** `uv run up.py <image>` or `uv run tilagup <image>`
 
-## What This Is
+## Architecture (authoritative mental model)
 
-Given an image, tilagup:
+```text
+image
+  ├─ base          soul / style / whole composition
+  ├─ zones[]       semantic regions (coherent meaning; may span many tiles)
+  └─ tiles[]       overlapping FastSD execution grid
+                     each tile → primary zone_id + short unique-local prompt
+```
 
-1. Creates a **run archive** (log everything; upscale is slow).
-2. Asks a vision agent for a **base prompt** (the soul of the image).
-3. **Splits** the image into overlapping tiles (crops on disk for agents + coords for SD).
-4. Asks agents for a **unique tile prompt** per crop, anchored to the base (variation controlled).
-5. Runs **FastSD CPU tiled SD upscale** with per-tile prompts + soft masks.
-6. Records **who wrote which prompt** (agy / grok / human) in JSON.
+| Layer | Purpose | CLIP |
+|-------|---------|------|
+| **Base** | Global style lock | Short (≤~50 words / ≤75 tokens) |
+| **Zone** | Object/scene strip identity (track, flame, mycelium, drip…) | Short zone prompt |
+| **Tile** | Local micro-detail **inside** its zone only | Unique-first, ≤75 tokens |
+
+**Zones are meaning. Tiles are execution.** Do not invent a second stitcher — FastSD tiled upscale + soft masks remain the blend path.
+
+Normative zone design: **`design/zones.md`**. User-facing: **`docs/zones.md`**.
+
+## What works today vs next
+
+| Capability | Status |
+|------------|--------|
+| Run archive `runs/<image_key>/<run_id>/` | Shipped |
+| Base + flat grid tile prompts | Shipped |
+| Loud CLI / dry-run / resume / `--reprompt-tiles` | Shipped |
+| CLIP fit (unique-first at upscale; short agent templates) | Shipped |
+| FastSD worker in FastSD venv (`FASTSDCPU_ROOT`) | Shipped |
+| Zone discovery, zone prompts, tile→zone assignment | **Next** (spec ready) |
+
+When implementing zones, update `run.json` schema + archive layout in the same PR as code. Do not leave docs lying.
 
 ## Repository Layout
 
-```
+```text
 tilagup/
-├── AGENTS.md              — this file
-├── README.md              — project overview
-├── pyproject.toml         — package + deps
-├── up.py                  — thin CLI entry (uv run up.py …)
-├── design/                — rationale, decisions
-├── docs/                  — user-facing guides
-├── src/tilagup/           — library code
-│   ├── agents/            — agy / grok adapters
-│   └── …
-├── scripts/               — one-off helpers
-├── tests/                 — unit tests (no GPU required)
-└── runs/                  — local run archives (gitignored)
+├── AGENTS.md
+├── README.md
+├── up.py
+├── design/                 # architecture (zones.md is normative)
+├── docs/                   # operators
+├── src/tilagup/            # library
+│   ├── agents/             # agy / grok / stub
+│   ├── archive.py
+│   ├── pipeline.py
+│   ├── tiles.py            # grid math (execution)
+│   ├── clip_fit.py
+│   ├── upscale_fastsd.py
+│   └── upscale_worker.py
+├── tests/
+└── runs/                   # gitignored archives
 ```
 
 ## Conventions
 
-### For all agents working here
-
 1. **AGENTS.md in every directory.** Read it before editing files there.
-2. **Run archives are sacred.** Layout is `runs/<image_key>/<run_id>/`. Never delete without explicit human OK. Prefer append-only `events.log` + update `run.json`.
-3. **Loud by default.** Print everything to the same terminal: full prompts, agent argv/output, heartbeats, tile N/M, upscale queue. `--quiet` mutes progress (final summary still prints). No “tail the log file” UX.
-4. **Base-locked tile prompts.** Every tile prompt must stay inside the base style/subject. Variation is local detail, not new global subjects.
-5. **Reuse FastSD blend.** Do not invent a new paste path. Feed `tiles[]` into FastSD’s tiled upscaler (overlap + soft mask).
-6. **Agent output is boring.** Vision agents must return prompt text only (or write a file). Parse failures → one retry → log + fail tile.
-7. **YAML/JSON for machine state; markdown for humans.** `run.json` is authoritative for a run; docs explain how to read it.
-8. **YAGNI for v0.1.** Interactive edit UI, multi-pass gem.md stages, fancy named zones — later.
+2. **Run archives are sacred.** Never delete `runs/…` without explicit human OK.
+3. **Loud by default.** Same terminal; `--quiet` only if asked. No “tail the log in another pane” as the primary UX.
+4. **Hierarchy:** base → zone → tile. Tile prompts must not invent a new global scene.
+5. **Unique-first.** Local/zone-specific detail comes before shared fluff so CLIP truncation cannot kill uniqueness.
+6. **Reuse FastSD blend.** Feed `tiles[]` into FastSD’s tiled upscaler.
+7. **Agent output is boring.** Prompt text only (or JSON for zone maps). Parse fail → retry → log + fail.
+8. **Machine state = JSON; humans = markdown.**
 
 ### Naming
 
 | Kind | Style |
 |------|--------|
-| Python modules | `snake_case.py` |
+| Modules | `snake_case.py` |
 | Docs | `lowercase-hyphenated.md` |
 | Run IDs | `YYYYMMDD_HHMMSS_<short>` |
 | Tile IDs | `r{row:02d}_c{col:02d}` |
+| Zone IDs | `z_<slug>` (e.g. `z_fire`, `z_mycelium`) |
 | JSON fields | `snake_case` |
 
 ### Commit prefixes
 
-- `feat:` — user-facing capability
-- `fix:` — bug fix
-- `docs:` — documentation only
-- `design:` — design/ rationale
-- `chore:` — packaging, lint, repo hygiene
-- `test:` — tests
+`feat:` `fix:` `docs:` `design:` `chore:` `test:`
 
 ### Agent attribution
-
-When an agent writes a prompt, record at minimum:
 
 ```json
 {
   "agent": "agy",
   "cli": "agy",
   "model": null,
-  "created_at": "ISO-8601",
-  "raw_path": "optional path to raw response"
+  "duration_ms": 12000,
+  "created_at": "ISO-8601"
 }
 ```
 
-Allowed `agent` values: `agy`, `grok`, `human`, `unknown`.
+Allowed `agent`: `agy`, `grok`, `stub`, `human`, `unknown`.
 
-## Current State
+## Pipeline stages (target order)
 
-**Phase:** 0.1.0-prealpha scaffold
+1. `init` — copy source, meta  
+2. `zones` — discover zones (agent JSON / future SAM)  
+3. `base_prompt` — global soul (may use zone list)  
+4. `split` — overlapping tile grid  
+5. `assign` — tile → primary zone (overlap)  
+6. `zone_prompts` — one short prompt per zone  
+7. `tile_prompts` — unique-local under zone lock  
+8. `dry_run_complete` or `upscale` → `done`
 
-**Done / target for this scaffold:**
+**Shipped today:** 1, 3, 4, 7 (flat: no zone lock), 8.  
+**Next:** 2, 5, 6, and zone lock on 7.
 
-- Package layout + AGENTS.md tree
-- Run archive (`run.json`, tiles, events.log)
-- Tile split with overlap
-- `agy` + `grok` headless adapters
-- `stub` offline agent for CI / full dry-run tests
-- Dry-run (prompts only)
-- FastSD CPU upscale hook (env `FASTSDCPU_ROOT`)
-- Resume + progress
+## Next implementation focus
 
-**Not yet:**
-
-- Interactive prompt editing
-- Multi-pass hierarchical “growth” (see gem.md experiments elsewhere)
-- Parallel agent fan-out
-
-## Next Action
-
-Implement → dry-run on a real image → wire FastSD → document in `docs/getting-started.md`.
+Build zone discovery + assignment + zone prompts per `design/zones.md`. Keep flat path as `--no-zones` fallback until zones are default.

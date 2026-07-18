@@ -1,21 +1,21 @@
 # AGENTS.md — design/
 
-> *For autonomous agents writing design docs. Humans: why we chose what we chose.*
+> *Architecture and rationale. Not tutorials (`docs/`). Not runtime code.*
 
-## What Lives Here
+## What lives here
 
-Design decisions and rationale. **Not** user tutorials (those are `docs/`). **Not** normative runtime behavior (code + `docs/run-archive.md` win for formats).
+| File | Role |
+|------|------|
+| `zones.md` | **Normative** zone system: data model, discovery, assignment, prompts, acceptance |
+| `rationale.md` | Why we chose archive-first, hierarchy, CLIP unique-first, FastSD venv, loud CLI |
 
-## Conventions
+## Rules
 
-1. One decision (or tightly related cluster) per file, `lowercase-hyphenated.md`.
-2. Every doc: context → options → decision → consequences.
-3. Link to code paths when a decision is implemented.
-4. Rejected ideas go in `rejected.md` (or a section), not deleted silently.
-5. Do not put implementation code here.
+1. Spec changes to zones land in `zones.md` in the same PR as code that implements them.  
+2. Mark **Status** (Designed / Partial / Shipped) at the top of each design doc.  
+3. Do not put install walkthroughs here — that is `docs/`.  
+4. Rejected ideas get a short entry in `rationale.md`, not silent deletion.
 
-## Files
+## Implementing zones
 
-| File | Content |
-|------|---------|
-| `rationale.md` | Core architecture: archive-first, base-locked tiles, agent attribution |
+Read `zones.md` fully before writing code. Pipeline stage order and archive layout there are authoritative. Flat path must remain as `--no-zones` until zones are default.
