@@ -313,6 +313,12 @@ class JobTracker:
         return time.monotonic() - self.t_start
 
     def render_lines(self) -> list[str]:
+        """Three clear time scopes — never the same ETA thrice.
+
+        JOB  = whole run remaining (one number)
+        STEP = which stage + progress within stage (no duplicate job ETA)
+        ITEM = current tile/prompt only (its own clock)
+        """
         el = self.overall_elapsed()
         rem = self.overall_remaining()
         total_est = el + rem
@@ -325,63 +331,75 @@ class JobTracker:
                 break
 
         mode = "dry-run" if self.dry_run else "full+upscale"
-        # Line 0 — full job clocks (tick every second)
-        line0 = (
-            f"JOB  {self.run_id or '…'}  [{mode}]  "
-            f"elapsed {_fmt_clock(el)}  |  remaining {_fmt_clock(rem)}  |  "
-            f"total est {_fmt_clock(total_est)}"
-        )
+        n_steps = len(self._plan)
 
-        # Line 1 — overall bar
-        width = 32
+        # ── Line 0: JOB only (single remaining for the whole thing)
+        width = 28
         filled = int(width * pct / 100)
         bar = "█" * filled + "░" * (width - filled)
-        line1 = f"     [{bar}] {pct:.0f}%"
+        line0 = (
+            f"JOB   {self.run_id or '…'} [{mode}]  "
+            f"elapsed {_fmt_clock(el)}   remaining {_fmt_clock(rem)}   "
+            f"[{bar}] {pct:.0f}%"
+        )
 
-        # Line 2 — step
-        n_steps = len(self._plan)
+        # ── Line 1: STEP (stage index + name + unit progress if multi)
         if current:
             step_i = self._plan.index(current.name) + 1
-            step_left = self._stage_eta_remaining(current)
-            line2 = (
-                f"STEP {step_i}/{n_steps}  {current.label}  "
-                f"step elapsed {_fmt_clock(current.elapsed)}  "
-                f"step left ~{_fmt_clock(step_left)}"
-            )
+            if current.n_units > 0:
+                u_done = current.units_done
+                u_tot = max(current.n_units, 1)
+                # working on unit (done+1), capped
+                u_now = min(u_done + 1, u_tot) if u_done < u_tot else u_tot
+                kind = (
+                    "tile"
+                    if current.name in ("tile_prompts", "upscale")
+                    else "item"
+                )
+                line1 = (
+                    f"STEP  {step_i} of {n_steps}: {current.label}   "
+                    f"{kind} {u_now} of {u_tot}   "
+                    f"({u_done} finished this step)"
+                )
+            else:
+                line1 = (
+                    f"STEP  {step_i} of {n_steps}: {current.label}   "
+                    f"(single work item)   elapsed {_fmt_clock(current.elapsed)}"
+                )
         else:
             done_n = sum(
-                1 for n in self._plan if self.stages[n].status in ("done", "skipped")
+                1
+                for n in self._plan
+                if self.stages[n].status in ("done", "skipped")
             )
-            line2 = f"STEP {done_n}/{n_steps}  (between steps)"
+            line1 = f"STEP  {done_n} of {n_steps}: (between stages)"
 
-        # Line 3 — unit subdivision (tile/prompt)
-        if current and current.n_units > 0:
-            u_done = current.units_done
-            u_tot = current.n_units
-            # display "working on" as next index (1-based)
-            u_now = min(u_done + 1, u_tot) if u_done < u_tot else u_tot
+        # ── Line 2: ITEM — only the current unit's own timing (not job remaining)
+        if current and current.n_units > 0 and current.units_done < current.n_units:
             per = self._per_unit_est(current)
             unit_spent = 0.0
-            if current.last_unit_t0 is not None and u_done < u_tot:
+            if current.last_unit_t0 is not None:
                 unit_spent = time.monotonic() - current.last_unit_t0
             unit_left = max(0.0, (per or 0) - unit_spent) if per else None
-            label = current.current_unit_label or "…"
-            kind = "tile" if current.name in ("tile_prompts", "upscale") else "unit"
-            line3 = (
-                f"UNIT {kind} {u_now}/{u_tot}  ({u_done} done)  "
-                f"id={label}  "
-                f"this {_fmt_clock(unit_spent)}"
+            label = current.current_unit_label or "(starting…)"
+            line2 = f"ITEM  {label}   this item {_fmt_clock(unit_spent)}"
+            if unit_left is not None and per:
+                line2 += f"   this item remaining ~{_fmt_clock(unit_left)}"
+                line2 += f"   (avg {_fmt_clock(per)}/item)"
+            elif per:
+                line2 += f"   (avg {_fmt_clock(per)}/item so far)"
+        elif current and current.n_units == 0:
+            # single-shot stage: estimate for THIS stage only (not whole job)
+            step_left = self._stage_eta_remaining(current)
+            line2 = (
+                f"ITEM  {current.label}   "
+                f"this stage {_fmt_clock(current.elapsed)}   "
+                f"this stage remaining ~{_fmt_clock(step_left)}"
             )
-            if unit_left is not None:
-                line3 += f"  left ~{_fmt_clock(unit_left)}"
-            if per:
-                line3 += f"  avg {_fmt_clock(per)}/ea"
-        elif current:
-            line3 = f"UNIT  (single-shot stage — no sub-items)"
         else:
-            line3 = "UNIT  —"
+            line2 = "ITEM  —"
 
-        # Line 4 — done
+        # ── Line 3: finished stages (actual times only — no ETAs)
         done_bits = []
         for name in self._plan:
             st = self.stages[name]
@@ -389,30 +407,43 @@ class JobTracker:
                 done_bits.append(f"{st.label} {_fmt_clock(st.elapsed)}")
             elif st.status == "skipped":
                 done_bits.append(f"{st.label} skip")
-        line4 = "DONE " + (" · ".join(done_bits) if done_bits else "(none yet)")
+        line3 = "DONE  " + (" · ".join(done_bits) if done_bits else "—")
 
-        # Line 5 — upcoming
+        # ── Line 4: upcoming stages (their own estimates only)
         up = []
         for name in self._plan:
             st = self.stages[name]
             if st.status == "pending":
-                up.append(f"{st.label} ~{_fmt_clock(self._stage_eta_remaining(st))}")
-        line5 = "NEXT " + (" · ".join(up[:4]) if up else "(none)")
+                up.append(
+                    f"{st.label} ~{_fmt_clock(self._stage_eta_remaining(st))}"
+                )
+        # If current multi-unit stage still has remaining units, show remainder here
+        # as "rest of this step" only when it's NOT the same as full job remaining
+        # (i.e. when there are also pending stages after)
+        if current and current.n_units > 0 and current.units_done < current.n_units:
+            rest_step = self._stage_eta_remaining(current)
+            pending_after = any(
+                self.stages[n].status == "pending" for n in self._plan
+            )
+            if pending_after:
+                up.insert(
+                    0,
+                    f"rest of {current.label} ~{_fmt_clock(rest_step)}",
+                )
+        line4 = "NEXT  " + (" · ".join(up) if up else "— (this is the last work)")
 
-        # Line 6 — history medians
-        agg = self.history.get("aggregates") or {}
-        tp = (agg.get("tile_prompts_per_tile") or {}).get("median_s")
-        upm = (agg.get("upscale_per_tile") or {}).get("median_s")
-        bits = []
-        if tp:
-            bits.append(f"hist prompt {_fmt_clock(tp)}/tile")
-        if upm:
-            bits.append(f"hist sd {_fmt_clock(upm)}/tile")
-        line6 = "HIST " + (" · ".join(bits) if bits else "priors only (need complete live runs)")
+        # ── Line 5: compact legend so labels stay obvious
+        line5 = (
+            "KEY   JOB remaining = whole run  ·  "
+            "STEP = which stage + tile counts  ·  "
+            "ITEM = only the prompt/tile running now"
+        )
 
-        line7 = f"agent={self.agent}  tiles={self.n_tiles or '?'}  ·  status updates every 1s"
+        line6 = f"      agent={self.agent}  planned_tiles={self.n_tiles or '?'}"
+        line7 = ""
 
         return [line0, line1, line2, line3, line4, line5, line6, line7]
+
 
     def refresh(self) -> None:
         if not self.enabled:
