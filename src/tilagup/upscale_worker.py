@@ -183,8 +183,6 @@ def main(argv: list[str] | None = None) -> int:
             return tex_pos
         return f"{content}, {tex_pos}"
 
-    base_fitted, _ = fit_tile(tok, base_raw, "", content_budget)
-    # fit_tile with empty base just unique-firsts; for base use head fit
     base_content = _head_fit(tok, base_raw, content_budget)
     base_prompt = _head_fit(tok, with_texture(base_content), max_tokens)
 
