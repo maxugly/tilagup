@@ -12,10 +12,13 @@ from typing import Any
 
 from tilagup.timing_stats import (
     STAGE_ORDER,
+    clean_unit_samples,
     estimate_seconds,
     fmt_duration,
     load_history,
+    mark_sample_complete,
     record_sample,
+    sample_is_complete,
 )
 
 
@@ -317,12 +320,21 @@ class JobTracker:
         bar = "█" * filled + "░" * (width - filled)
         line4 = f"Overall [{bar}] {pct:.0f}%"
 
-        # history hint
+        # history hint (complete live-agent medians only)
         agg = self.history.get("aggregates") or {}
-        n_hist = sum(int(v.get("count") or 0) for v in agg.values()) // max(len(agg), 1)
-        line5 = (
-            f"Timing: history samples~{n_hist}  "
-            f"priors+this-run units  (saved under timing_history)"
+        tp = (agg.get("tile_prompts_per_tile") or {}).get("median_s")
+        up = (agg.get("upscale_per_tile") or {}).get("median_s")
+        n_tp = (agg.get("tile_prompts_per_tile") or {}).get("count", 0)
+        n_up = (agg.get("upscale_per_tile") or {}).get("count", 0)
+        bits = []
+        if tp:
+            bits.append(f"prompt~{fmt_duration(tp)}/tile×{n_tp}")
+        if up:
+            bits.append(f"sd~{fmt_duration(up)}/tile×{n_up}")
+        line5 = "Timing: " + (
+            " · ".join(bits) + "  (complete runs, outliers dropped)"
+            if bits
+            else "priors only until a complete live run finishes"
         )
 
         line6 = f"Agent={self.agent}  tiles={self.n_tiles or '?'}"
@@ -348,10 +360,15 @@ class JobTracker:
                 "units_done": st.units_done,
             }
             if st.unit_samples:
-                info["per_unit_s"] = sum(st.unit_samples) / len(st.unit_samples)
+                cleaned = clean_unit_samples(st.unit_samples, stage=name)
                 info["unit_samples"] = st.unit_samples[-50:]
+                if cleaned:
+                    info["per_unit_s"] = float(sum(cleaned) / len(cleaned))
+                    info["per_unit_median_s"] = float(
+                        __import__("statistics").median(cleaned)
+                    )
             stages_out[name] = info
-        return {
+        snap = {
             "run_id": self.run_id,
             "dry_run": self.dry_run,
             "n_tiles": self.n_tiles,
@@ -360,6 +377,7 @@ class JobTracker:
             "stages": stages_out,
             "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+        return mark_sample_complete(snap)
 
     def finish(self, *, persist: bool = True, run_dir: Path | None = None) -> None:
         snap = self.snapshot()
@@ -371,18 +389,19 @@ class JobTracker:
                 )
             except Exception:
                 pass
-        if persist and any(s.status == "done" for s in self.stages.values()):
+        # Only persist usable samples; incomplete/stub still may write run timing.json
+        if persist and sample_is_complete(snap):
             try:
                 record_sample(snap)
             except Exception:
                 pass
         self.bar.stop()
-        # one final plain summary line into the log stream
         from tilagup import log
 
+        flag = "complete" if snap.get("complete") else "incomplete (not used for ETA)"
         log.say(
             f"timing: elapsed {fmt_duration(self.overall_elapsed())}  "
-            f"saved history → timing_history.json"
+            f"{flag}  history → timing_history.json"
         )
 
 
