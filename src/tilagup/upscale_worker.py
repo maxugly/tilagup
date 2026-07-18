@@ -145,25 +145,50 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
 
+    # Match FastSD vanilla tile defs EXACTLY (tiled_upscale.py when tiles==[]).
+    # Critical: mask_box softens only left/top (overlap with already-pasted tiles),
+    # and extends to full scaled tile size on right/bottom. Passing mask_box=None
+    # softens ALL four sides over transparent black → dark grid gutters.
+    scale_factor = float(job["scale_factor"])
+    tile_overlap = int(job["tile_overlap"])
+
     fs_tiles = []
     for i, t in enumerate(tiles):
         raw = (t.get("prompt") or base_raw or "").strip()
         prompt, changed, note = fit_tile(tok, raw, base_raw, max_tokens)
         flag = f" [{note}]" if changed else ""
+        x = int(t["x"])
+        y = int(t["y"])
+        w = int(t["w"])
+        h = int(t["h"])
+        # Prefer offsets stored at split time; fall back like FastSD (0 on first row/col)
+        x_offset = int(t["x_offset"]) if t.get("x_offset") is not None else (
+            tile_overlap if x > 0 else 0
+        )
+        y_offset = int(t["y_offset"]) if t.get("y_offset") is not None else (
+            tile_overlap if y > 0 else 0
+        )
+        mask_box = (
+            x_offset,
+            y_offset,
+            int(w * scale_factor),
+            int(h * scale_factor),
+        )
         print(
             f"[tilagup-worker] {i+1}/{len(tiles)} id={t.get('id')} "
-            f"tok≈{_n(tok, prompt)}{flag}\n    {prompt!r}",
+            f"{w}x{h} mask_box={mask_box} tok≈{_n(tok, prompt)}{flag}\n"
+            f"    {prompt!r}",
             flush=True,
         )
         fs_tiles.append(
             {
-                "x": int(t["x"]),
-                "y": int(t["y"]),
-                "w": int(t["w"]),
-                "h": int(t["h"]),
-                "mask_box": None,
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+                "mask_box": mask_box,
                 "prompt": prompt,
-                "scale_factor": float(job["scale_factor"]),
+                "scale_factor": scale_factor,
             }
         )
 
