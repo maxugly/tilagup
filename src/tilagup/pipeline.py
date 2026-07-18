@@ -375,12 +375,21 @@ def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
     neg = data.get("negative_prompt") or cfg.get("negative_prompt") or DEFAULT_NEGATIVE
     n_tiles = len(data["tiles"])
 
+    tex_mode = cfg.get("texture") or "none"
+    tex_str = float(cfg.get("texture_strength", 1.0))
     log.banner("FastSD tiled upscale")
     log.kv("strength", cfg.get("strength"))
     log.kv("scale", cfg.get("scale"))
     log.kv("tiles", n_tiles)
+    log.kv("texture", f"{tex_mode} @ {tex_str}")
     log.kv("output", out_path)
-    arch.event("upscale_start", strength=cfg.get("strength"), scale=cfg.get("scale"))
+    arch.event(
+        "upscale_start",
+        strength=cfg.get("strength"),
+        scale=cfg.get("scale"),
+        texture=tex_mode,
+        texture_strength=tex_str,
+    )
     if tr:
         tr.stage_start("upscale", n_units=n_tiles)
     try:
@@ -394,6 +403,8 @@ def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
             scale_factor=float(cfg.get("scale", 2.0)),
             tile_overlap=int(cfg.get("overlap", 32)),
             tile_size=int(cfg.get("tile_size", 256)),
+            texture=tex_mode,
+            texture_strength=tex_str,
         )
     except Exception as e:
         data = arch.load()

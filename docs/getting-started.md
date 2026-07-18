@@ -96,6 +96,8 @@ With `--dry-run` on an already complete dry-run: no-op unless `--reprompt-tiles`
 | `--agent` | `both` | `agy` / `grok` / `both` / `stub` |
 | `--variation` | `0.35` | Prompt drift guidance |
 | `--strength` | `0.28` | SD img2img strength |
+| `--texture` | `none` | Upscale-only pack: `none` (default, unchanged), `grit`, `smooth` |
+| `--texture-strength` | `1.0` | 0..1 how hard the pack applies |
 | `--tile-size` | `256` | Grid stride |
 | `--overlap` | `32` | Soft blend region |
 | `--dry-run` | off | Prompts only |

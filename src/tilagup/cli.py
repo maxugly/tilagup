@@ -70,6 +70,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Negative prompt for SD upscale.",
     )
     p.add_argument(
+        "--texture",
+        choices=("none", "grit", "smooth"),
+        default="none",
+        help=(
+            "Upscale-only texture pack on SD prompts. "
+            "none=default (unchanged behavior); grit=film grain/raw micro-detail; "
+            "smooth=polished. Does not rewrite dry-run agent files."
+        ),
+    )
+    p.add_argument(
+        "--texture-strength",
+        type=float,
+        default=1.0,
+        help="0..1 how hard the texture pack applies (default 1.0). Ignored if --texture none.",
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="Split + write all prompts; do not run SD upscale.",
@@ -133,6 +149,9 @@ def main(argv: list[str] | None = None) -> int:
     if not (0.0 <= args.variation <= 1.0):
         log.always("error: --variation must be in [0, 1]", err=True)
         return 2
+    if not (0.0 <= args.texture_strength <= 1.0):
+        log.always("error: --texture-strength must be in [0, 1]", err=True)
+        return 2
 
     config = {
         "agent": args.agent,
@@ -142,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
         "tile_size": args.tile_size,
         "overlap": args.overlap,
         "negative_prompt": args.negative_prompt,
+        "texture": args.texture,
+        "texture_strength": args.texture_strength,
         "dry_run": args.dry_run,
         "agy_model": args.agy_model,
         "grok_model": args.grok_model,

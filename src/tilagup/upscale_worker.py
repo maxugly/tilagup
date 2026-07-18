@@ -130,8 +130,76 @@ def main(argv: list[str] | None = None) -> int:
 
     strength = float(job["strength"])
     base_raw = job["base_prompt"]
-    base_prompt = _head_fit(tok, base_raw, max_tokens)
-    negative_prompt = _head_fit(tok, job["negative_prompt"], max_tokens)
+    tex_mode = (job.get("texture") or "none").strip().lower()
+    tex_str = float(job.get("texture_strength") or 1.0)
+
+    # Texture packs live in tilagup; worker may not import the package — inline minimal apply
+    def _tex_pack(mode: str, strength: float) -> tuple[str, str]:
+        if mode in ("", "none", "off", "default") or strength <= 0:
+            return "", ""
+        packs = {
+            "grit": (
+                "heavy film grain, raw texture, micro detail, sharp grain, "
+                "imperfect surface, gritty detail",
+                "smooth, plastic, airbrushed, soft focus, porcelain, "
+                "overprocessed, glossy skin, blurry, rounded edges",
+            ),
+            "smooth": (
+                "smooth finish, clean surface, polished detail, soft gradients",
+                "heavy grain, noise, gritty, dirty, chaotic noise, film grain",
+            ),
+        }
+        if mode not in packs:
+            return "", ""
+        pos, neg = packs[mode]
+        strength = max(0.0, min(1.0, strength))
+        if strength >= 0.99:
+            return pos, neg
+
+        def scale(text: str) -> str:
+            parts = [p.strip() for p in text.split(",") if p.strip()]
+            n = max(1, int(round(len(parts) * strength)))
+            return ", ".join(parts[:n])
+
+        return scale(pos), scale(neg)
+
+    tex_pos, tex_neg = _tex_pack(tex_mode, tex_str)
+    if tex_pos or tex_neg:
+        print(
+            f"[tilagup-worker] texture mode={tex_mode} strength={tex_str} "
+            f"pos={tex_pos!r} neg={tex_neg!r}",
+            flush=True,
+        )
+
+    # Reserve CLIP room for texture tail so grit isn't always truncated off
+    tex_tokens = _n(tok, tex_pos) + (2 if tex_pos else 0)
+    content_budget = max(24, max_tokens - tex_tokens)
+
+    def with_texture(content: str) -> str:
+        content = (content or "").strip().strip(",")
+        if not tex_pos:
+            return content
+        if not content:
+            return tex_pos
+        return f"{content}, {tex_pos}"
+
+    base_fitted, _ = fit_tile(tok, base_raw, "", content_budget)
+    # fit_tile with empty base just unique-firsts; for base use head fit
+    base_content = _head_fit(tok, base_raw, content_budget)
+    base_prompt = _head_fit(tok, with_texture(base_content), max_tokens)
+
+    neg_merged = job["negative_prompt"] or ""
+    if tex_neg:
+        base_l = neg_merged.lower()
+        add = [
+            p.strip()
+            for p in tex_neg.split(",")
+            if p.strip() and p.strip().lower() not in base_l
+        ]
+        if add:
+            neg_merged = (neg_merged.rstrip(", ") + ", " + ", ".join(add)).strip(", ")
+    negative_prompt = _head_fit(tok, neg_merged, max_tokens)
+
     if base_prompt != _normalize(base_raw):
         print(f"[tilagup-worker] base CLIP-fit → {_n(tok, base_prompt)} tokens", flush=True)
 
@@ -141,7 +209,8 @@ def main(argv: list[str] | None = None) -> int:
 
     tiles = job["tiles"]
     print(
-        f"[tilagup-worker] tiles={len(tiles)} strength={strength} max_clip_tokens={max_tokens}",
+        f"[tilagup-worker] tiles={len(tiles)} strength={strength} "
+        f"max_clip_tokens={max_tokens} texture={tex_mode}",
         flush=True,
     )
 
@@ -155,8 +224,11 @@ def main(argv: list[str] | None = None) -> int:
     fs_tiles = []
     for i, t in enumerate(tiles):
         raw = (t.get("prompt") or base_raw or "").strip()
-        prompt, changed, note = fit_tile(tok, raw, base_raw, max_tokens)
+        content, changed, note = fit_tile(tok, raw, base_raw, content_budget)
+        prompt = _head_fit(tok, with_texture(content), max_tokens)
         flag = f" [{note}]" if changed else ""
+        if tex_pos:
+            flag += " [texture]"
         x = int(t["x"])
         y = int(t["y"])
         w = int(t["w"])

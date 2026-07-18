@@ -66,6 +66,8 @@ def run_tiled_upscale(
     scale_factor: float = 2.0,
     tile_overlap: int = 32,
     tile_size: int = 256,
+    texture: str = "none",
+    texture_strength: float = 1.0,
 ) -> Path:
     root = ensure_fastsd_root()
     py = fastsd_python(root)
@@ -79,16 +81,17 @@ def run_tiled_upscale(
     log.kv("scale", scale_factor)
     log.kv("tile_size", tile_size)
     log.kv("overlap", tile_overlap)
+    log.kv("texture", f"{texture} @ {texture_strength}")
     log.kv("fastsd_root", root)
     log.kv("fastsd_python", py)
     log.kv("worker", worker)
-    log.dump("base prompt for upscale", base_prompt)
-    log.dump("negative prompt", negative_prompt)
+    log.dump("base prompt for upscale (pre-texture)", base_prompt)
+    log.dump("negative prompt (pre-texture)", negative_prompt)
 
     for i, t in enumerate(tiles):
         prompt = (t.get("prompt") or base_prompt or "").strip()
         log.progress(i, len(tiles), f"queue tile {t.get('id')} {t.get('w')}x{t.get('h')}")
-        log.dump(f"upscale prompt tile {t.get('id')}", prompt)
+        log.dump(f"upscale prompt tile {t.get('id')} (pre-texture)", prompt)
 
     job = {
         "fastsd_src": str(root / "src"),
@@ -102,6 +105,8 @@ def run_tiled_upscale(
         "base_prompt": base_prompt,
         "negative_prompt": negative_prompt,
         "tiles": tiles,
+        "texture": texture or "none",
+        "texture_strength": float(texture_strength),
         # SD1.5 / turbo CLIP limit is 77; leave headroom
         "max_clip_tokens": int(os.environ.get("TILAGUP_MAX_CLIP_TOKENS", "75")),
     }
