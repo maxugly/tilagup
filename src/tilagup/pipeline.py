@@ -64,6 +64,8 @@ def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float
     log.banner(f"base prompt via {agent.name}")
     log.kv("image", src)
     log.kv("timeout_s", timeout_s)
+    if tr:
+        tr.set_unit_label("base_prompt", f"via {agent.name}")
     arch.event("base_prompt_start", agent=agent.name)
     result = agent.complete(user, timeout_s=timeout_s)
     result = _ensure_short_prompt(
@@ -266,6 +268,11 @@ def stage_tile_prompts(
             f"START {tile['id']} ({pass_i + 1}/{n_todo}) via {agent.name}",
         )
         log.say(f"    crop: {crop.name}  x={tile['x']} y={tile['y']} w={tile['w']} h={tile['h']}")
+        if tr:
+            tr.set_unit_label(
+                "tile_prompts",
+                f"{tile['id']} via {agent.name}",
+            )
         arch.event("tile_prompt_start", tile_id=tile["id"], agent=agent.name, index=n, total=total)
         try:
             result = agent.complete(full, timeout_s=timeout_s)

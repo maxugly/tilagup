@@ -179,9 +179,14 @@ def run_tiled_upscale(
                             part = text.split("tile ", 1)[1]
                             frac = part.split()[0]
                             cur_s, tot_s = frac.split("/", 1)
-                            tr.stage_unit("upscale", units_done=int(cur_s))
+                            cur_i = int(cur_s)
+                            # unit just started (FastSD logs before work)
+                            if cur_i > 0:
+                                tr.stage_unit("upscale", units_done=cur_i - 1)
+                                tr.set_unit_label("upscale", f"tile {cur_i}/{tot_s}")
                     except Exception:
                         pass
+
         rc = proc.wait()
 
     except Exception:
