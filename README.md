@@ -41,6 +41,17 @@ With zones:
 
 Same zone → shared spine. Adjacent tiles stay one track / one pile / one flame column.
 
+## Presets (easiest way to run)
+
+Named dry-run + upscale scripts so you don’t remember flags. See [`presets/README.md`](presets/README.md).
+
+```bash
+./presets/grit_dry.sh /path/to/image.png
+./presets/grit_upscale.sh          # newest run, or pass a runs/... path
+```
+
+Bundled: `default`, `grit`, `grit_hot`, `smooth`, `stub_smoke`. Copy a pair to make your own.
+
 ## Quickstart (what works now)
 
 ### Prerequisites

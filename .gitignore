@@ -1,5 +1,7 @@
 # runs & local artifacts
 runs/
+# personal preset experiments (optional)
+presets/local/
 # local timing dumps if written in-repo
 timing_history.json
 *.png
