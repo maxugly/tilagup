@@ -1,5 +1,7 @@
 # runs & local artifacts
 runs/
+# local timing dumps if written in-repo
+timing_history.json
 *.png
 *.jpg
 *.jpeg

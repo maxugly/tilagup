@@ -16,6 +16,7 @@ from tilagup.archive import (
     utc_now,
 )
 from tilagup.clip_fit import token_len
+from tilagup.job_status import JobTracker, get_tracker, set_tracker
 from tilagup.prompts_lib import (
     BASE_SYSTEM,
     DEFAULT_NEGATIVE,
@@ -35,12 +36,18 @@ def _source_path(arch: RunArchive, data: dict[str, Any]) -> Path:
 
 
 def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float = 300.0) -> None:
+    tr = get_tracker()
     data = arch.load()
     if data.get("base_prompt") and data["base_prompt"].get("text") and not force:
         log.say("skip base prompt (already present)")
         arch.event("skip_base_prompt", reason="already_present")
+        if tr:
+            tr.stage_start("base_prompt")
+            tr.stage_end("base_prompt", skipped=True)
         return
 
+    if tr:
+        tr.stage_start("base_prompt")
     cfg = data["config"]
     agents = build_agents(
         cfg.get("agent", "both"),
@@ -90,6 +97,8 @@ def stage_base_prompt(arch: RunArchive, *, force: bool = False, timeout_s: float
     )
     log.dump("BASE PROMPT (full)", result.text)
     arch.event("base_prompt_done", agent=result.agent, chars=len(result.text))
+    if tr:
+        tr.stage_end("base_prompt")
 
 
 def _ensure_short_prompt(agent, result, *, kind: str, timeout_s: float):
@@ -147,11 +156,18 @@ def clear_tile_prompts(arch: RunArchive) -> int:
 
 
 def stage_split(arch: RunArchive, *, force: bool = False) -> None:
+    tr = get_tracker()
     data = arch.load()
     if data.get("tiles") and not force:
         log.say(f"skip split ({len(data['tiles'])} tiles already present)")
         arch.event("skip_split", reason="tiles_already_present", count=len(data["tiles"]))
+        if tr:
+            tr.set_n_tiles(len(data["tiles"]))
+            tr.stage_start("split")
+            tr.stage_end("split", skipped=True)
         return
+    if tr:
+        tr.stage_start("split")
 
     cfg = data["config"]
     src = _source_path(arch, data)
@@ -177,6 +193,9 @@ def stage_split(arch: RunArchive, *, force: bool = False) -> None:
         )
     log.say(f"split done: {len(tiles)} crops in {arch.tiles_dir}")
     arch.event("split_done", tiles=len(tiles), width=w, height=h)
+    if tr:
+        tr.set_n_tiles(len(tiles))
+        tr.stage_end("split")
 
 
 def stage_tile_prompts(
@@ -209,6 +228,7 @@ def stage_tile_prompts(
     log.kv("remaining", total - already)
     log.say("EVERY tile prints START/DONE + full prompt in THIS terminal. no tail -f.")
 
+    tr = get_tracker()
     # Track work in this pass so --force/--reprompt doesn't show 64/64 forever
     completed_this_pass = 0
     to_do = [
@@ -218,6 +238,13 @@ def stage_tile_prompts(
     ]
     n_todo = len(to_do)
     log.kv("to_prompt_this_pass", n_todo)
+    if tr:
+        tr.set_n_tiles(total)
+        if n_todo == 0:
+            tr.stage_start("tile_prompts", n_units=total)
+            tr.stage_end("tile_prompts", skipped=True)
+        else:
+            tr.stage_start("tile_prompts", n_units=n_todo)
 
     for pass_i, i in enumerate(to_do):
         tile = tiles[i]
@@ -295,6 +322,8 @@ def stage_tile_prompts(
         data["stage"] = "tile_prompts"
         arch.save(data)
         completed_this_pass += 1
+        if tr:
+            tr.stage_unit("tile_prompts", units_done=completed_this_pass)
         log.progress(
             completed_this_pass,
             n_todo,
@@ -317,13 +346,19 @@ def stage_tile_prompts(
     skipped = total - n_todo
     if skipped:
         log.say(f"skipped {skipped} tiles that already had prompts (use --force / --reprompt-tiles)")
+    if tr and n_todo > 0:
+        tr.stage_end("tile_prompts")
 
 
 def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
+    tr = get_tracker()
     data = arch.load()
     if data.get("output") and Path(arch.root / data["output"]).is_file() and not force:
         log.say("skip upscale (output already exists)")
         arch.event("skip_upscale", reason="output_exists")
+        if tr:
+            tr.stage_start("upscale", n_units=len(data.get("tiles") or []))
+            tr.stage_end("upscale", skipped=True)
         return
 
     missing = [t["id"] for t in data.get("tiles") or [] if not t.get("prompt")]
@@ -338,13 +373,16 @@ def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
     out_path = arch.root / out_name
     base = data["base_prompt"]["text"]
     neg = data.get("negative_prompt") or cfg.get("negative_prompt") or DEFAULT_NEGATIVE
+    n_tiles = len(data["tiles"])
 
     log.banner("FastSD tiled upscale")
     log.kv("strength", cfg.get("strength"))
     log.kv("scale", cfg.get("scale"))
-    log.kv("tiles", len(data["tiles"]))
+    log.kv("tiles", n_tiles)
     log.kv("output", out_path)
     arch.event("upscale_start", strength=cfg.get("strength"), scale=cfg.get("scale"))
+    if tr:
+        tr.stage_start("upscale", n_units=n_tiles)
     try:
         run_tiled_upscale(
             source_path=src,
@@ -364,6 +402,8 @@ def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
         arch.save(data)
         log.say(f"upscale FAILED: {e}", err=True)
         arch.event("upscale_failed", error=str(e))
+        if tr:
+            tr.stage_end("upscale")
         raise
 
     data = arch.load()
@@ -376,6 +416,9 @@ def stage_upscale(arch: RunArchive, *, force: bool = False) -> None:
     arch.save(data)
     log.say(f"upscale done → {out_path}")
     arch.event("upscale_done", output=out_name)
+    if tr:
+        tr.stage_end("upscale")
+
 
 
 def run_pipeline(
@@ -388,6 +431,50 @@ def run_pipeline(
     force: bool = False,
     reprompt_tiles: bool = False,
     timeout_s: float = 300.0,
+) -> RunArchive:
+    # sticky status + timing (TTY only for bar; always records timing.json)
+    from tilagup import log as _log
+
+    quiet = _log.is_quiet()
+    tracker = JobTracker(
+        dry_run=dry_run,
+        agent=str(config.get("agent") or "both"),
+        enabled=not quiet,
+    )
+    set_tracker(tracker)
+    tracker.stage_start("init")
+
+    arch: RunArchive | None = None
+    try:
+        arch = _run_pipeline_inner(
+            image=image,
+            resume=resume,
+            runs_dir=runs_dir,
+            config=config,
+            dry_run=dry_run,
+            force=force,
+            reprompt_tiles=reprompt_tiles,
+            timeout_s=timeout_s,
+            tracker=tracker,
+        )
+        return arch
+    finally:
+        run_dir = arch.root if arch is not None else None
+        tracker.finish(persist=True, run_dir=run_dir)
+        set_tracker(None)
+
+
+def _run_pipeline_inner(
+    *,
+    image: Path | None,
+    resume: Path | None,
+    runs_dir: Path,
+    config: dict[str, Any],
+    dry_run: bool,
+    force: bool,
+    reprompt_tiles: bool,
+    timeout_s: float,
+    tracker: JobTracker,
 ) -> RunArchive:
     if resume:
         arch = open_run(resume)
@@ -404,6 +491,14 @@ def run_pipeline(
         data["config"] = merged
         arch.save(data)
         log.say(f"resumed stage={data.get('stage')} dry_run={merged.get('dry_run')}")
+        tracker.set_run_id(data.get("run_id") or "")
+        tracker.set_n_tiles(len(data.get("tiles") or []))
+        # plan must match what we will actually run (dry vs full)
+        tracker.dry_run = bool(dry_run)
+        tracker.stages.clear()
+        tracker._build_plan()
+        tracker.stage_start("init")
+        tracker.stage_end("init", skipped=True)
     else:
         if image is None:
             raise ValueError("image path required unless --resume")
@@ -419,8 +514,10 @@ def run_pipeline(
         log.kv("dry_run", dry_run)
         if dry_run:
             log.say("MODE: dry-run — REAL short CLIP-safe prompts, NO upscale")
-            log.say("progress prints HERE (same terminal). if silent >15s you should see heartbeats.")
+            log.say("sticky status at bottom of terminal · verbose log scrolls above")
         arch = create_run(runs_dir, image, cfg)
+        tracker.set_run_id(arch.load().get("run_id") or "")
+        tracker.stage_end("init")
 
     if reprompt_tiles:
         log.banner("reprompt tiles — wipe long prompts, regenerate unique-first shorts")
@@ -451,6 +548,13 @@ def run_pipeline(
         arch.event("already_complete", stage=stage)
         return arch
 
+    # If continuing to upscale, rebuild plan so sticky includes SD stage
+    if not want_dry and tracker.dry_run:
+        tracker.dry_run = False
+        tracker.stages.clear()
+        tracker._build_plan()
+        tracker.refresh()
+
     stage_base_prompt(arch, force=force and not reprompt_tiles, timeout_s=timeout_s)
     stage_split(arch, force=False)  # never re-split on reprompt; crops stay
     stage_tile_prompts(arch, force=force_tiles, timeout_s=timeout_s)
@@ -470,6 +574,17 @@ def run_pipeline(
     if data["config"].get("dry_run"):
         data["config"]["dry_run"] = False
         arch.save(data)
+
+    if "upscale" not in tracker.stages:
+        tracker.dry_run = False
+        tracker.stages.clear()
+        tracker._build_plan()
+        # mark prior stages done so ETA only counts upscale
+        for name in ("init", "base_prompt", "split", "tile_prompts"):
+            if name in tracker.stages:
+                tracker.stages[name].status = "done"
+                tracker.stages[name].t0 = tracker.t_start
+                tracker.stages[name].t1 = tracker.t_start
 
     stage_upscale(arch, force=force)
     log.banner("all done")

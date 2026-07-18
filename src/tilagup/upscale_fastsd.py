@@ -161,8 +161,24 @@ def run_tiled_upscale(
                     streams = [x for x in streams if x is not s]
                     continue
                 tag = "out" if s is proc.stdout else "err"
-                log.say(f"  [fastsd:{tag}] {line.rstrip()}")
+                text = line.rstrip()
+                log.say(f"  [fastsd:{tag}] {text}")
+                # track SD tile progress for sticky ETA: "[SD Upscale] tile 3/64 …"
+                if "tile " in text and "/" in text:
+                    try:
+                        from tilagup.job_status import get_tracker
+
+                        tr = get_tracker()
+                        if tr:
+                            # … tile N/M …
+                            part = text.split("tile ", 1)[1]
+                            frac = part.split()[0]
+                            cur_s, tot_s = frac.split("/", 1)
+                            tr.stage_unit("upscale", units_done=int(cur_s))
+                    except Exception:
+                        pass
         rc = proc.wait()
+
     except Exception:
         proc.kill()
         raise

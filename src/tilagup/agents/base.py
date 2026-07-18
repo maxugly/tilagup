@@ -143,6 +143,14 @@ def run_argv(
                     f"timeout_in={int(remaining)}s"
                 )
                 last_beat = now
+                try:
+                    from tilagup.job_status import get_tracker
+
+                    tr = get_tracker()
+                    if tr:
+                        tr.tick()
+                except Exception:
+                    pass
 
             if not streams:
                 if proc.poll() is not None:

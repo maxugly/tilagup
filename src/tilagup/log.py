@@ -39,6 +39,15 @@ def _emit(msg: str) -> None:
         return
     # Once, to stderr — always visible in an interactive terminal, not doubled
     print(f"[{_ts()}] {msg}", file=sys.stderr, flush=True)
+    # keep sticky ETA bar fresh when a tracker is live
+    try:
+        from tilagup.job_status import get_tracker
+
+        tr = get_tracker()
+        if tr is not None:
+            tr.tick()
+    except Exception:
+        pass
 
 
 def say(msg: str = "", **_ignored: Any) -> None:

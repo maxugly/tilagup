@@ -47,6 +47,11 @@ Expected artifacts under `runs/<image_key>/<run_id>/`:
 
 CLI prints `path:` / `json:` when finished. Stage: `dry_run_complete`.
 
+On a real TTY you also get a **sticky status strip at the bottom**: elapsed / ETA,
+step x/x, tile x/x, done-step timings, and upcoming estimates. Verbose log still
+scrolls above. Timing samples are written to `runs/.../timing.json` and aggregated
+in `~/.local/share/tilagup/timing_history.json` for smarter ETAs over time.
+
 ### Inspect prompts
 
 ```bash
